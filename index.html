@@ -108,6 +108,7 @@
         <div class="stat"><b id="atSpotFish">0</b><span>This spot</span></div>
       </div>
       <button class="btn big green" onclick="go('catch')">🐟 Log Catch</button>
+      <button class="btn ghost sm" id="watchBtn" onclick="FishClip.toggle()">🎥 Watch for bite</button>
       <div class="row" style="margin-top:10px">
         <button class="btn ghost sm" onclick="newSpot()">📍 New spot / moved</button>
         <button class="btn warn sm" onclick="endTrip()">■ End trip</button>
@@ -160,6 +161,7 @@
       <button class="btn ghost" style="margin-top:12px" onclick="document.getElementById('cPhoto').click()">📷 Photo on the board</button>
       <input id="cPhoto" type="file" accept="image/*" capture="environment" class="hide" onchange="onPhoto(event)">
       <img id="cPreview" class="photo-preview">
+      <video id="cVidPreview" class="photo-preview" style="display:none" controls playsinline muted></video>
 
       <details>
         <summary>＋ More detail (optional)</summary>
@@ -216,18 +218,31 @@ const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
+var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
 
 function load(){try{return JSON.parse(localStorage.getItem(KEY))||blank()}catch(e){return blank()}}
 function blank(){return{trips:[],spots:[],catches:[],activeTrip:null,activeSpot:null,prefs:{}}}
 function save(){localStorage.setItem(KEY,JSON.stringify(S))}
 
-//// ---------- photos (IndexedDB) ----------
-let _db=null;
-function db(){return new Promise(r=>{if(_db)return r(_db);const q=indexedDB.open("panfish_pics",1);
-  q.onupgradeneeded=e=>e.target.result.createObjectStore("pics");
-  q.onsuccess=e=>{_db=e.target.result;r(_db)};q.onerror=()=>r(null)})}
-async function putPic(id,dataURL){const d=await db();if(!d)return;d.transaction("pics","readwrite").objectStore("pics").put(dataURL,id)}
-async function getPic(id){const d=await db();if(!d)return null;return new Promise(r=>{const g=d.transaction("pics").objectStore("pics").get(id);g.onsuccess=()=>r(g.result||null);g.onerror=()=>r(null)})}
+//// ---------- photos + clips (IndexedDB) ----------
+let _db = null;
+function db() {
+  return new Promise(r => {
+    if (_db) return r(_db);
+    const q = indexedDB.open("panfish_pics", 2);          // ← bumped 1 → 2
+    q.onupgradeneeded = e => {
+      const d = e.target.result;
+      if (!d.objectStoreNames.contains("pics"))  d.createObjectStore("pics");
+      if (!d.objectStoreNames.contains("clips")) d.createObjectStore("clips");
+    };
+    q.onsuccess = e => { _db = e.target.result; r(_db); };
+    q.onerror = () => r(null);
+  });
+}
+async function putPic(id, dataURL) { const d = await db(); if (!d) return; d.transaction("pics", "readwrite").objectStore("pics").put(dataURL, id); }
+async function getPic(id) { const d = await db(); if (!d) return null; return new Promise(r => { const g = d.transaction("pics").objectStore("pics").get(id); g.onsuccess = () => r(g.result || null); g.onerror = () => r(null); }); }
+async function putClip(id, blob) { const d = await db(); if (!d) return; d.transaction("clips", "readwrite").objectStore("clips").put(blob, id); }
+async function getClip(id) { const d = await db(); if (!d) return null; return new Promise(r => { const g = d.transaction("clips").objectStore("clips").get(id); g.onsuccess = () => r(g.result || null); g.onerror = () => r(null); }); }
 
 //// ---------- helpers ----------
 const $=id=>document.getElementById(id);
@@ -353,6 +368,7 @@ function openCatch(){
   if(S.prefs.lure)$("cLure").value=S.prefs.lure;
   ["cLen","cWt","cDepth","cColor","cSize","cNotes"].forEach(i=>$(i).value="");
   pendingPhoto=null; $("cPreview").style.display="none";
+  pendingClip=null; const _v=$("cVidPreview"); if(_v){ _v.removeAttribute("src"); _v.style.display="none"; }
   catchStamp=new Date();
   $("catchGeo").innerHTML=`<span>🕐 <b>${hhmm(catchStamp)}</b></span><span class="muted">locating…</span>`;
   getLoc().then(l=>{window._catchLoc=l;
@@ -384,9 +400,10 @@ async function saveCatch(){
     kept:$("cKept").value,sex:$("cSex").value,condition:$("cCond").value,
     angler:S.prefs.anglers||"",notes:$("cNotes").value.trim(),
     lat:(window._catchLoc&&window._catchLoc.lat)||"",lon:(window._catchLoc&&window._catchLoc.lon)||"",
-    hasPhoto:!!pendingPhoto,synced:false,photoSynced:false});
+    hasPhoto:!!pendingPhoto,hasVideo:!!pendingClip,synced:false,photoSynced:false});
   sp.synced=false; S.prefs.species=$("cSpecies").value; S.prefs.lure=$("cLure").value; save();
   if(pendingPhoto)await putPic(id,pendingPhoto);
+  if(pendingClip)await putClip(id,pendingClip);
   toast("🐟 saved"); go("home"); syncNow(true);
 }
 
@@ -448,6 +465,7 @@ function catchRow(c){return clean({id:c.id,trip_id:c.trip,effort_id:c.spot,time:
   lure_bait:c.lure,lure_color:c.color,lure_size:c.size,technique:c.technique,retrieve_speed:c.retrieve,
   kept_released:c.kept,sex:c.sex,condition:c.condition,
   photo_file:c.hasPhoto&&SBsession?(SBsession.user.id+"/"+c.id+".jpg"):null,
+  video_file:c.hasVideo&&SBsession?(SBsession.user.id+"/"+c.id+".webm"):null,
   angler:c.angler,notes:c.notes,lat:c.lat,lon:c.lon})}
 
 async function syncNow(){
@@ -464,6 +482,13 @@ async function syncNow(){
       const {error}=await SB.storage.from("photos").upload(SBsession.user.id+"/"+c.id+".jpg",blob,{upsert:true,contentType:"image/jpeg"});
       if(!error)c.photoSynced=true;
     }
+    for(const c of S.catches.filter(c=>c.hasVideo&&!c.videoSynced)){
+      const blob=await getClip(c.id); if(!blob)continue;
+      const {error}=await SB.storage.from("videos").upload(
+        SBsession.user.id+"/"+c.id+".webm", blob,
+        {upsert:true, contentType:blob.type||"video/webm"});
+      if(!error)c.videoSynced=true;
+    }
     save(); _syncErr=false;
   }catch(e){_syncErr=true;}
   _syncing=false; updateDot();
@@ -478,6 +503,117 @@ function updateDot(){
   else if(pend===0){d.textContent="✓ Synced";d.className="pill ok";}
   else{d.textContent="Saving "+pend;d.className="pill pend";}
 }
+
+/* ===== FishClip: hands-free "got a bite" video clipper ===================
+ * Keeps a rolling ~30s camera buffer while fishing. On the trigger phrase
+ * it grabs the last 30s as one playable clip and opens Log Catch with it
+ * attached. Pure web — works in Android Chrome. (iOS needs a native wrapper.)
+ * ======================================================================== */
+window.FishClip = (function () {
+  const PRE_SECONDS = 30;     // seconds of footage to keep before the bite
+  const SLICE_MS    = 1000;   // recorder emits a chunk this often
+  const PHRASES     = ["got a bite", "fish on", "got one", "got him", "bite"];
+
+  let stream = null, rec = null, recog = null, wake = null;
+  let header = null;          // FIRST chunk = WebM init/header. MUST keep it.
+  let chunks = [];            // rolling window of recent media chunks
+  let watching = false;
+
+  function pickMime() {
+    const want = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus",
+                  "video/webm", "video/mp4"];
+    return want.find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || "";
+  }
+
+  function startRecorder() {
+    header = null; chunks = [];
+    const mime = pickMime();
+    rec = new MediaRecorder(stream, mime ? { mimeType: mime, videoBitsPerSecond: 2_500_000 } : undefined);
+    rec.ondataavailable = e => {
+      if (!e.data || !e.data.size) return;
+      if (!header) { header = e.data; return; }      // header chunk: keep forever
+      chunks.push(e.data);
+      const max = Math.ceil(PRE_SECONDS * 1000 / SLICE_MS);
+      while (chunks.length > max) chunks.shift();     // drop oldest, keep ~30s
+    };
+    rec.start(SLICE_MS);
+  }
+
+  // Assemble header + rolling window into ONE playable file.
+  function grab() {
+    if (!header) return null;
+    const mime = (rec && rec.mimeType) || "video/webm";
+    return new Blob([header, ...chunks], { type: mime });
+  }
+
+  function onTrigger() {
+    const blob = grab();
+    if (!blob) { toast("clip not ready yet"); return; }
+    go("catch");                 // resets the form (clears pendingClip)
+    setTimeout(() => {           // ...then attach the fresh clip after reset
+      window.pendingClip = blob;
+      const v = document.getElementById("cVidPreview");
+      if (v) { v.src = URL.createObjectURL(blob); v.style.display = "block"; }
+      toast("🎥 bite clip grabbed");
+    }, 0);
+  }
+
+  function startRecog() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { toast("voice not supported on this browser"); return; }
+    recog = new SR();
+    recog.continuous = true; recog.interimResults = true; recog.lang = "en-US";
+    recog.onresult = ev => {
+      for (let i = ev.resultIndex; i < ev.results.length; i++) {
+        const txt = ev.results[i][0].transcript.toLowerCase();
+        if (PHRASES.some(p => txt.includes(p))) { onTrigger(); return; }
+      }
+    };
+    recog.onend = () => { if (watching) { try { recog.start(); } catch (e) {} } }; // auto-restart
+    try { recog.start(); } catch (e) {}
+  }
+
+  async function start() {
+    if (watching) return;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: true
+      });
+    } catch (e) { toast("camera/mic blocked"); return; }
+    watching = true;
+    startRecorder();
+    startRecog();
+    try { wake = await navigator.wakeLock.request("screen"); } catch (e) {}
+    setBtn(true);
+  }
+
+  function stop() {
+    watching = false;
+    try { rec && rec.state !== "inactive" && rec.stop(); } catch (e) {}
+    try { recog && recog.stop(); } catch (e) {}
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    if (wake) { try { wake.release(); } catch (e) {} wake = null; }
+    stream = null; rec = null; header = null; chunks = [];
+    setBtn(false);
+  }
+
+  function setBtn(on) {
+    const b = document.getElementById("watchBtn");
+    if (!b) return;
+    b.textContent = on ? "🎥 Watching… (say “got a bite”)" : "🎥 Watch for bite";
+    b.classList.toggle("green", on);
+  }
+
+  // Screen wake locks drop when you tab away; re-acquire when visible again.
+  document.addEventListener("visibilitychange", async () => {
+    if (watching && document.visibilityState === "visible" && !wake) {
+      try { wake = await navigator.wakeLock.request("screen"); } catch (e) {}
+    }
+  });
+
+  return { start, stop, toggle() { watching ? stop() : start(); }, get watching() { return watching; } };
+})();
 
 //// ---------- boot ----------
 go("home");

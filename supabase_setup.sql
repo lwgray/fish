@@ -115,4 +115,18 @@ create policy "photos read"   on storage.objects for select to authenticated usi
 create policy "photos insert" on storage.objects for insert to authenticated with check (bucket_id = 'photos');
 create policy "photos update" on storage.objects for update to authenticated using (bucket_id = 'photos');
 
--- Done. Tables: trips, spots, catches.  Bucket: photos.
+-- ---------- VIDEO CLIPS (FishClip "got a bite") ----------
+alter table public.catches add column if not exists video_file text;
+
+insert into storage.buckets (id, name, public)
+values ('videos', 'videos', false)
+on conflict (id) do nothing;
+
+drop policy if exists "videos read"   on storage.objects;
+drop policy if exists "videos insert" on storage.objects;
+drop policy if exists "videos update" on storage.objects;
+create policy "videos read"   on storage.objects for select to authenticated using (bucket_id = 'videos');
+create policy "videos insert" on storage.objects for insert to authenticated with check (bucket_id = 'videos');
+create policy "videos update" on storage.objects for update to authenticated using (bucket_id = 'videos');
+
+-- Done. Tables: trips, spots, catches.  Buckets: photos, videos.
