@@ -1,0 +1,19 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Logs / temp
+*.log
+tmp/
+
+# Deploy
+.netlify/
+
+# Local data exports / backups
+*.csv
+panfish_backup_*.json
