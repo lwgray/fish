@@ -71,6 +71,21 @@
     border:1px solid var(--accent2);padding:11px 18px;border-radius:999px;font-weight:600;z-index:20;opacity:0;transition:.25s;max-width:90%}
   .toast.show{opacity:1}
   .photo-preview{width:100%;max-height:240px;object-fit:cover;border-radius:12px;margin-top:8px;display:none}
+  .clickable{cursor:pointer}
+  .tripcard{display:flex;gap:12px;align-items:center}
+  .tripcard img{width:60px;height:60px;border-radius:10px;object-fit:cover;background:#06202a;flex:0 0 auto}
+  .tripcard .ti{flex:1;min-width:0}.tripcard .ti b{font-size:16px}
+  .backbtn{background:none;border:none;color:var(--accent);font-weight:700;font-size:15px;padding:6px 2px;margin-bottom:6px;cursor:pointer}
+  .spoth{font-size:13px;color:var(--muted);font-weight:700;margin:16px 2px 8px;display:flex;gap:12px;flex-wrap:wrap}
+  .spoth b{color:var(--text)}
+  .kv{display:flex;justify-content:space-between;gap:12px;padding:9px 1px;border-bottom:1px solid var(--line);font-size:15px}
+  .kv span{color:var(--muted)}.kv b{color:var(--text);font-weight:600;text-align:right}
+  .media{width:100%;border-radius:12px;margin-top:10px;background:#06202a;display:block}
+  .gallery{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
+  .gtile{position:relative;aspect-ratio:1/1;border-radius:10px;overflow:hidden;background:#06202a;cursor:pointer}
+  .gtile img{width:100%;height:100%;object-fit:cover}
+  .gtile .pv{position:absolute;right:5px;bottom:4px;font-size:15px;filter:drop-shadow(0 1px 2px #000)}
+  .empty{padding:28px 12px;text-align:center;color:var(--muted)}
 </style>
 </head>
 <body>
@@ -190,13 +205,25 @@
     </div>
   </section>
 
-  <!-- REVIEW -->
-  <section id="view-review" class="hide">
+  <!-- HISTORY -->
+  <section id="view-history" class="hide">
     <div class="seg" style="margin-bottom:12px">
-      <button class="on" id="rThis" onclick="setReview(true)">This trip</button>
-      <button id="rAll" onclick="setReview(false)">All time</button>
+      <button class="on" id="htTrips" onclick="setHistTab('trips')">Trips</button>
+      <button id="htGallery" onclick="setHistTab('gallery')">Gallery</button>
     </div>
-    <div id="reviewList"></div>
+    <div id="historyBody"></div>
+  </section>
+
+  <!-- TRIP DETAIL -->
+  <section id="view-trip" class="hide">
+    <button class="backbtn" onclick="go('history')">‹ All trips</button>
+    <div id="tripBody"></div>
+  </section>
+
+  <!-- CATCH DETAIL -->
+  <section id="view-fish" class="hide">
+    <button class="backbtn" id="fishBack" onclick="go('trip')">‹ Back</button>
+    <div id="fishBody"></div>
   </section>
 
 </div>
@@ -204,7 +231,7 @@
 <nav>
   <button id="nav-home" class="on" onclick="go('home')"><span class="ico">🏠</span>Home</button>
   <div class="fab"><button onclick="go('catch')"><span class="ico">🐟</span>Catch</button></div>
-  <button id="nav-review" onclick="go('review')"><span class="ico">📋</span>Catches</button>
+  <button id="nav-history" onclick="go('history')"><span class="ico">📋</span>History</button>
 </nav>
 
 <div id="toast" class="toast"></div>
@@ -286,12 +313,14 @@ async function getWeather(lat,lon){
 
 //// ---------- navigation ----------
 function go(v){
-  ["home","setup","catch","review"].forEach(x=>$("view-"+x).classList.toggle("hide",x!==v));
-  ["home","review"].forEach(x=>$("nav-"+x)&&$("nav-"+x).classList.toggle("on",x===v));
+  ["home","setup","catch","history","trip","fish"].forEach(x=>$("view-"+x).classList.toggle("hide",x!==v));
+  ["home","history"].forEach(x=>$("nav-"+x)&&$("nav-"+x).classList.toggle("on",x===v||(x==="history"&&(v==="trip"||v==="fish"))));
   if(v==="home")renderHome();
   if(v==="setup")openSetup();
   if(v==="catch")openCatch();
-  if(v==="review")renderReview();
+  if(v==="history")renderHistory();
+  if(v==="trip")renderTrip();
+  if(v==="fish")renderFish();
   window.scrollTo(0,0);
 }
 
@@ -407,23 +436,110 @@ async function saveCatch(){
   toast("🐟 saved"); go("home"); syncNow(true);
 }
 
-//// ---------- review ----------
-function setReview(b){reviewThisTrip=b;$("rThis").classList.toggle("on",b);$("rAll").classList.toggle("on",!b);renderReview()}
-async function renderReview(){
-  const t=activeTrip();
-  let list=S.catches.slice().reverse();
-  if(reviewThisTrip&&t)list=list.filter(c=>c.trip===t.id);
-  else if(reviewThisTrip&&!t&&S.trips.length){const last=S.trips[S.trips.length-1].id;list=list.filter(c=>c.trip===last)}
-  const box=$("reviewList");
-  if(!list.length){box.innerHTML='<div class="card center muted">No catches yet.</div>';return}
-  box.innerHTML=list.map(c=>`<div class="item" onclick="del('${c.id}')">
-      <img id="thumb-${c.id}" alt="">
-      <div class="t"><b>${c.species}</b> <span class="tag">${c.length_in||"?"}\"</span>
-        <div><span>${c.time} · ${c.lure}${c.weight_g?" · "+c.weight_g+"g":""}${c.synced?"":" · ⏳"}</span></div></div>
-      <span class="muted">✕</span></div>`).join("");
-  for(const c of list){if(c.hasPhoto){const d=await getPic(c.id);if(d)$("thumb-"+c.id).src=d;}}
+//// ---------- history / trip / catch detail / gallery ----------
+let curTrip=null, curCatch=null, histTab="trips";
+const esc=s=>String(s==null?"":s).replace(/[<>&]/g,m=>m==="<"?"&lt;":m===">"?"&gt;":"&amp;");
+
+function setHistTab(t){histTab=t;$("htTrips").classList.toggle("on",t==="trips");$("htGallery").classList.toggle("on",t==="gallery");renderHistory();}
+function openTrip(id){curTrip=id;go("trip");}
+function openFish(id){curCatch=id;go("fish");}
+
+function tripStats(t){
+  const cs=S.catches.filter(c=>c.trip===t.id);
+  const hrs=(t.end?(t.end-t.start):(Date.now()-t.start))/3.6e6;
+  return{n:cs.length, hrs:hrs.toFixed(1), cpue:hrs>0?(cs.length/hrs).toFixed(2):"0"};
 }
-function del(id){if(!confirm("Delete this catch?"))return;S.catches=S.catches.filter(c=>c.id!==id);save();renderReview();toast("Deleted")}
+
+async function renderHistory(){
+  const box=$("historyBody");
+  if(histTab==="gallery")return renderGallery(box);
+  if(!S.trips.length){box.innerHTML='<div class="card empty">No trips yet. Tap Start Trip to begin.</div>';return}
+  const trips=S.trips.slice().reverse();
+  box.innerHTML=trips.map(t=>{const s=tripStats(t),act=(t.id===S.activeTrip);
+    return `<div class="card tripcard clickable" onclick="openTrip('${t.id}')">
+      <img id="th-${t.id}" alt="">
+      <div class="ti"><b>${esc(t.water_body)||"Trip"}</b>${act?' <span class="tag">● live</span>':''}
+        <div class="meta"><span>${t.date}</span><span>🐟 <b>${s.n}</b></span><span>${s.hrs}h</span><span>${s.cpue}/hr</span></div></div>
+      <span class="muted">›</span></div>`;}).join("");
+  for(const t of trips){const c=S.catches.find(c=>c.trip===t.id&&c.hasPhoto);if(c){const d=await getPic(c.id);const el=$("th-"+t.id);if(d&&el)el.src=d;}}
+}
+
+function catchRowHTML(c){
+  return `<div class="item clickable" onclick="openFish('${c.id}')">
+    <img id="thumb-${c.id}" alt="">
+    <div class="t"><b>${c.species}</b> <span class="tag">${c.length_in||"?"}"</span>${c.hasVideo?' <span class="tag">🎥</span>':''}
+      <div><span>${c.time} · ${esc(c.lure)}${c.weight_g?" · "+c.weight_g+"g":""}${c.synced?"":" · ⏳"}</span></div></div>
+    <span class="muted">›</span></div>`;
+}
+
+async function renderTrip(){
+  const t=S.trips.find(x=>x.id===curTrip),box=$("tripBody");
+  if(!t){box.innerHTML='<div class="card empty">Trip not found.</div>';return}
+  const s=tripStats(t),w=t.weather||{};
+  let html=`<div class="card">
+    <div style="display:flex;align-items:center"><b style="font-size:18px">${esc(t.water_body)||"Trip"}</b>
+      <span class="tag" style="margin-left:auto">${t.date}</span></div>
+    <div class="meta" style="margin-top:8px"><span>🐟 <b>${s.n}</b> fish</span><span>${s.hrs}h</span><span>${s.cpue}/hr</span>${t.craft?`<span>${t.craft}</span>`:''}</div>
+    ${w.air_temp!=null?`<div class="meta" style="margin-top:6px"><span>🌡 ${w.air_temp}°F</span><span>📊 ${w.pressure_inHg}" ${w.pressure_trend||''}</span><span>💨 ${w.wind_mph} ${w.wind_dir||''}</span><span>☁ ${w.sky||''}</span>${t.moon?`<span>🌙 ${t.moon}</span>`:''}</div>`:''}
+  </div>`;
+  const spots=S.spots.filter(sp=>sp.trip===t.id);
+  if(!S.catches.some(c=>c.trip===t.id)){html+='<div class="card empty">No catches logged on this trip.</div>';}
+  else{
+    spots.forEach(sp=>{
+      const cs=S.catches.filter(c=>c.spot===sp.id);
+      const mins=sp.end?Math.round((sp.end-sp.start)/60000):Math.round((Date.now()-sp.start)/60000);
+      html+=`<div class="spoth"><b>📍 ${esc(sp.name)}</b><span>${mins} min</span><span>🐟 ${cs.length}</span>${sp.depth?`<span>${sp.depth} ft</span>`:''}${sp.structure?`<span>${esc(sp.structure)}</span>`:''}</div>`;
+      html+=cs.length?cs.map(catchRowHTML).join(""):'<div class="hint" style="margin:0 0 6px 2px">no catches here — still useful data</div>';
+    });
+    const orphan=S.catches.filter(c=>c.trip===t.id&&!spots.some(sp=>sp.id===c.spot));
+    if(orphan.length)html+=orphan.map(catchRowHTML).join("");
+  }
+  box.innerHTML=html;
+  for(const c of S.catches.filter(c=>c.trip===t.id&&c.hasPhoto)){const d=await getPic(c.id);const el=$("thumb-"+c.id);if(d&&el)el.src=d;}
+}
+
+async function renderFish(){
+  const c=S.catches.find(x=>x.id===curCatch),box=$("fishBody");
+  if(!c){box.innerHTML='<div class="card empty">Catch not found.</div>';return}
+  const t=S.trips.find(x=>x.id===c.trip);
+  $("fishBack").textContent="‹ "+(t?(t.water_body||"Trip"):"Back");
+  const kv=(k,v)=>(v!==""&&v!=null)?`<div class="kv"><span>${k}</span><b>${v}</b></div>`:"";
+  box.innerHTML=`<div class="card">
+    <div style="display:flex;align-items:center"><b style="font-size:20px">${c.species}</b>
+      <span class="tag" style="margin-left:auto">${c.synced?"☁ synced":"⏳ on phone"}</span></div>
+    <div id="fishMedia"></div>
+    ${kv("Length",c.length_in?c.length_in+'" '+(c.length_type||""):"")}
+    ${kv("Weight",c.weight_g?c.weight_g+" g ("+c.weight_oz+" oz)":"")}
+    ${kv("Depth",c.depth?c.depth+" ft":"")}
+    ${kv("Lure",esc([c.lure,c.color,c.size].filter(Boolean).join(" · ")))}
+    ${kv("Technique",[c.technique,c.retrieve].filter(Boolean).join(" · "))}
+    ${kv("Kept / released",c.kept)}
+    ${kv("Sex / condition",[c.sex,c.condition].filter(x=>x&&x!=="Unknown").join(" · "))}
+    ${kv("Time",(t?t.date+" ":"")+c.time)}
+    ${kv("GPS",c.lat&&c.lon?c.lat+", "+c.lon:"")}
+    ${kv("Angler",esc(c.angler))}
+    ${c.notes?`<div class="kv"><span>Notes</span><b style="max-width:62%">${esc(c.notes)}</b></div>`:""}
+  </div>
+  <button class="btn ghost sm" style="color:var(--danger);border-color:var(--danger)" onclick="delFish('${c.id}')">Delete this catch</button>`;
+  const m=$("fishMedia");
+  if(c.hasPhoto){const d=await getPic(c.id);if(d)m.innerHTML+=`<img class="media" src="${d}">`;}
+  if(c.hasVideo){const b=await getClip(c.id);if(b)m.innerHTML+=`<video class="media" src="${URL.createObjectURL(b)}" controls playsinline></video>`;}
+  if(!c.hasPhoto&&!c.hasVideo)m.innerHTML='<div class="hint">No photo or video for this catch.</div>';
+}
+
+function delFish(id){
+  if(!confirm("Delete this catch? This can't be undone."))return;
+  const c=S.catches.find(x=>x.id===id),back=c?c.trip:null;
+  S.catches=S.catches.filter(x=>x.id!==id); save(); toast("Deleted");
+  if(back){curTrip=back;go("trip");}else go("history");
+}
+
+async function renderGallery(box){
+  const list=S.catches.filter(c=>c.hasPhoto||c.hasVideo).reverse();
+  if(!list.length){box.innerHTML='<div class="card empty">No photos or videos yet. Use 📷 or 🎥 when you log a catch.</div>';return}
+  box.innerHTML=`<div class="gallery">${list.map(c=>`<div class="gtile" onclick="openFish('${c.id}')">${c.hasPhoto?`<img id="g-${c.id}" alt="">`:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:26px">🎥</div>`}${c.hasVideo&&c.hasPhoto?'<span class="pv">🎥</span>':''}</div>`).join("")}</div>`;
+  for(const c of list){if(!c.hasPhoto)continue;const d=await getPic(c.id);const el=$("g-"+c.id);if(d&&el)el.src=d;}
+}
 
 //// =================================================================
 //// BACKGROUND SYNC — silent, no UI. Fill EMBED once and data just flows.
