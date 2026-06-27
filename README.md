@@ -39,7 +39,19 @@ npx wrangler pages deploy . --project-name=fish
 Either way the app goes live at `https://<project>.pages.dev`. Open that link on your
 phone and **Add to Home Screen** to use it like a native app.
 
-## Backend (Supabase)
+### Troubleshooting
+
+**Build fails with "A compatibility_date is required when uploading a Worker."**
+The project was created as a **Worker** and is running `npx wrangler deploy`, which
+deploys a server Worker. This app is static — deploy it as **Pages** instead. Set the
+project's build/deploy command to:
+
+```bash
+npx wrangler pages deploy . --project-name=fish
+```
+
+…or recreate it via the **Pages → Connect to Git** flow above, which has no deploy
+command at all. Static Pages deploys never need a `compatibility_date`.
 
 1. Create a free Supabase project.
 2. Run [`supabase_setup.sql`](./supabase_setup.sql) in the SQL Editor. It creates the
