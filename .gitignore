@@ -11,8 +11,9 @@ Thumbs.db
 *.log
 tmp/
 
-# Deploy
-.netlify/
+# Deploy (Cloudflare / Wrangler)
+.wrangler/
+node_modules/
 
 # Local data exports / backups
 *.csv
