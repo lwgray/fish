@@ -314,6 +314,7 @@ async function getWeather(lat,lon){
 
 //// ---------- navigation ----------
 function go(v){
+  document.querySelectorAll("video").forEach(el=>{try{el.pause();}catch(e){}});  // stop any playing clip when leaving a screen
   ["home","setup","catch","history","trip","fish"].forEach(x=>$("view-"+x).classList.toggle("hide",x!==v));
   ["home","history"].forEach(x=>$("nav-"+x)&&$("nav-"+x).classList.toggle("on",x===v||(x==="history"&&(v==="trip"||v==="fish"))));
   if(v==="home")renderHome();
