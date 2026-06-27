@@ -53,6 +53,15 @@ npx wrangler pages deploy . --project-name=fish
 …or recreate it via the **Pages → Connect to Git** flow above, which has no deploy
 command at all. Static Pages deploys never need a `compatibility_date`.
 
+**Build fails with "Authentication error [code: 10000]" on a `/pages/projects/...` call.**
+The build is using a custom `CLOUDFLARE_API_TOKEN` env var whose scope doesn't include
+Pages (token permissions are separate from your account role). Fix it either way:
+
+- **Cleanest:** use the native **Pages → Connect to Git** flow, which authenticates
+  internally — no token or deploy command to manage.
+- **Or** edit the token at <https://dash.cloudflare.com/profile/api-tokens> to add
+  **Account → Cloudflare Pages → Edit**, then update the `CLOUDFLARE_API_TOKEN` env var.
+
 1. Create a free Supabase project.
 2. Run [`supabase_setup.sql`](./supabase_setup.sql) in the SQL Editor. It creates the
    `trips`, `spots`, and `catches` tables, a `photos` storage bucket, and row-level
