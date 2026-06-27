@@ -207,6 +207,7 @@
 
   <!-- HISTORY -->
   <section id="view-history" class="hide">
+    <div style="text-align:right"><button class="backbtn" style="margin:0 0 4px" onclick="restoreFromCloud()">↻ Restore from cloud</button></div>
     <div class="seg" style="margin-bottom:12px">
       <button class="on" id="htTrips" onclick="setHistTab('trips')">Trips</button>
       <button id="htGallery" onclick="setHistTab('gallery')">Gallery</button>
@@ -453,7 +454,7 @@ function tripStats(t){
 async function renderHistory(){
   const box=$("historyBody");
   if(histTab==="gallery")return renderGallery(box);
-  if(!S.trips.length){box.innerHTML='<div class="card empty">No trips yet. Tap Start Trip to begin.</div>';return}
+  if(!S.trips.length){box.innerHTML='<div class="card empty">No trips here yet. Tap <b>Start Trip</b> to begin — or use <b>↻ Restore from cloud</b> above to pull your history back.</div>';return}
   const trips=S.trips.slice().reverse();
   box.innerHTML=trips.map(t=>{const s=tripStats(t),act=(t.id===S.activeTrip);
     return `<div class="card tripcard clickable" onclick="openTrip('${t.id}')">
@@ -522,8 +523,8 @@ async function renderFish(){
   </div>
   <button class="btn ghost sm" style="color:var(--danger);border-color:var(--danger)" onclick="delFish('${c.id}')">Delete this catch</button>`;
   const m=$("fishMedia");
-  if(c.hasPhoto){const d=await getPic(c.id);if(d)m.innerHTML+=`<img class="media" src="${d}">`;}
-  if(c.hasVideo){const b=await getClip(c.id);if(b)m.innerHTML+=`<video class="media" src="${URL.createObjectURL(b)}" controls playsinline></video>`;}
+  if(c.hasPhoto){const d=await photoURL(c);if(d)m.innerHTML+=`<img class="media" src="${d}">`;}
+  if(c.hasVideo){const u=await videoURL(c);if(u)m.innerHTML+=`<video class="media" src="${u}" controls playsinline></video>`;}
   if(!c.hasPhoto&&!c.hasVideo)m.innerHTML='<div class="hint">No photo or video for this catch.</div>';
 }
 
@@ -538,7 +539,59 @@ async function renderGallery(box){
   const list=S.catches.filter(c=>c.hasPhoto||c.hasVideo).reverse();
   if(!list.length){box.innerHTML='<div class="card empty">No photos or videos yet. Use 📷 or 🎥 when you log a catch.</div>';return}
   box.innerHTML=`<div class="gallery">${list.map(c=>`<div class="gtile" onclick="openFish('${c.id}')">${c.hasPhoto?`<img id="g-${c.id}" alt="">`:`<div style="width:100%;height:100%;display:flex;align-items:center;justify-content:center;font-size:26px">🎥</div>`}${c.hasVideo&&c.hasPhoto?'<span class="pv">🎥</span>':''}</div>`).join("")}</div>`;
-  for(const c of list){if(!c.hasPhoto)continue;const d=await getPic(c.id);const el=$("g-"+c.id);if(d&&el)el.src=d;}
+  for(const c of list){if(!c.hasPhoto)continue;const d=await photoURL(c);const el=$("g-"+c.id);if(d&&el)el.src=d;}
+}
+
+//// ---------- restore from cloud (pull) ----------
+const _murl={};
+function epochFrom(date,hm){if(!date||!hm)return null;const t=new Date(date+"T"+hm+":00").getTime();return isNaN(t)?null:t;}
+async function photoURL(c){
+  const d=await getPic(c.id); if(d)return d;
+  if(_murl["p"+c.id])return _murl["p"+c.id];
+  if(c.cloudPhoto&&SB&&navigator.onLine){try{const {data}=await SB.storage.from("photos").createSignedUrl(c.cloudPhoto,3600);if(data&&data.signedUrl)return _murl["p"+c.id]=data.signedUrl;}catch(e){}}
+  return null;
+}
+async function videoURL(c){
+  const b=await getClip(c.id); if(b)return URL.createObjectURL(b);
+  if(_murl["v"+c.id])return _murl["v"+c.id];
+  if(c.cloudVideo&&SB&&navigator.onLine){try{const {data}=await SB.storage.from("videos").createSignedUrl(c.cloudVideo,3600);if(data&&data.signedUrl)return _murl["v"+c.id]=data.signedUrl;}catch(e){}}
+  return null;
+}
+function cloudToTrip(r){
+  const start=epochFrom(r.date,r.start_time)||Date.now(), end=r.end_time?epochFrom(r.date,r.end_time):null;
+  const w=(r.air_temp_f!=null||r.pressure_inhg!=null)?{air_temp:r.air_temp_f,pressure_inHg:r.pressure_inhg,pressure_trend:r.pressure_trend,wind_mph:r.wind_mph,wind_dir:r.wind_dir,sky:r.sky}:null;
+  return{id:r.id,date:r.date,start,end,water_body:r.water_body,target:r.target_species,craft:r.watercraft,
+    anglers:r.anglers,lat:r.launch_lat??"",lon:r.launch_lon??"",weather:w,moon:r.moon_phase,synced:true};
+}
+function cloudToSpot(r,date){
+  const start=epochFrom(date,r.time_start)||Date.now(), end=r.time_end?epochFrom(date,r.time_end):null;
+  return{id:r.id,trip:r.trip_id,name:r.spot_name||"Spot",start,end,lat:r.lat??"",lon:r.lon??"",
+    depth:r.depth_ft??"",structure:r.structure||"",bottom:r.bottom||"",water_temp:r.water_temp_f??"",
+    rods:r.rods??"",technique:r.primary_technique||"",notes:r.notes||"",synced:true};
+}
+function cloudToCatch(r){
+  return{id:r.id,trip:r.trip_id,spot:r.effort_id,time:r.time,species:r.species,
+    length_in:r.length_in??"",length_type:r.length_type||"TL",weight_g:r.weight_g??"",weight_oz:r.weight_oz??"",
+    depth:r.depth_caught_ft??"",lure:r.lure_bait||"",color:r.lure_color||"",size:r.lure_size||"",
+    technique:r.technique||"",retrieve:r.retrieve_speed||"",kept:r.kept_released||"",sex:r.sex||"",condition:r.condition||"",
+    angler:r.angler||"",notes:r.notes||"",lat:r.lat??"",lon:r.lon??"",
+    hasPhoto:!!r.photo_file,hasVideo:!!r.video_file,cloudPhoto:r.photo_file||null,cloudVideo:r.video_file||null,
+    synced:true,photoSynced:true,videoSynced:true};
+}
+async function restoreFromCloud(){
+  if(!SB||!SBsession){toast("Cloud not ready — try again in a moment");return}
+  if(!navigator.onLine){toast("Need internet to restore");return}
+  toast("Restoring from cloud…");
+  try{
+    const [tr,sp,ca]=await Promise.all([SB.from("trips").select("*"),SB.from("spots").select("*"),SB.from("catches").select("*")]);
+    if(tr.error||sp.error||ca.error)throw(tr.error||sp.error||ca.error);
+    const ht=new Set(S.trips.map(t=>t.id)); (tr.data||[]).forEach(r=>{if(!ht.has(r.id))S.trips.push(cloudToTrip(r));});
+    const td={}; S.trips.forEach(t=>td[t.id]=t.date);
+    const hs=new Set(S.spots.map(s=>s.id)); (sp.data||[]).forEach(r=>{if(!hs.has(r.id))S.spots.push(cloudToSpot(r,td[r.trip_id]));});
+    const hc=new Set(S.catches.map(c=>c.id)); (ca.data||[]).forEach(r=>{if(!hc.has(r.id))S.catches.push(cloudToCatch(r));});
+    S.trips.sort((a,b)=>a.start-b.start); S.spots.sort((a,b)=>a.start-b.start);
+    save(); toast("Restored "+((tr.data||[]).length)+" trips, "+((ca.data||[]).length)+" catches"); go("history");
+  }catch(e){toast("Restore failed: "+(e.message||e));}
 }
 
 //// =================================================================
