@@ -658,7 +658,7 @@ async function restoreFromCloud(auto){
     S.trips.sort((a,b)=>a.start-b.start); S.spots.sort((a,b)=>a.start-b.start);
     save();
     const nt=(tr.data||[]).length;
-    if(auto){ if(nt){toast("Restored your history from the cloud");renderHome();} }
+    if(auto){ localStorage.setItem("autoRestored","1"); if(nt){toast("Restored your history from the cloud");renderHome();} }
     else{ toast("Restored "+nt+" trips, "+((ca.data||[]).length)+" catches"); go("history"); }
   }catch(e){if(!auto)toast("Restore failed: "+(e.message||e));}
 }
@@ -678,7 +678,7 @@ function initSB(){
       SBsession=data.session;
       if(!SBsession){try{const {data:d}=await SB.auth.signInAnonymously();SBsession=d.session;}catch(e){}}
       updateDot(); syncNow(true);
-      if(SBsession&&!S.trips.length&&!localStorage.getItem("autoRestored")){localStorage.setItem("autoRestored","1");restoreFromCloud(true);}
+      if(SBsession&&!S.trips.length&&!localStorage.getItem("autoRestored"))restoreFromCloud(true);
     });
   }catch(e){SB=null}
   updateDot();
