@@ -129,4 +129,7 @@ create policy "videos read"   on storage.objects for select to authenticated usi
 create policy "videos insert" on storage.objects for insert to authenticated with check (bucket_id = 'videos');
 create policy "videos update" on storage.objects for update to authenticated using (bucket_id = 'videos');
 
+-- ---------- MISSED BITES (hands-free "it got away") ----------
+alter table public.catches add column if not exists missed boolean default false;
+
 -- Done. Tables: trips, spots, catches.  Buckets: photos, videos.

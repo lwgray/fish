@@ -97,6 +97,7 @@
   <h1>🎣 Panfish Log</h1>
   <span id="syncDot" class="pill">On phone</span>
   <span id="status" class="pill">No trip</span>
+  <button id="gearBtn" class="pill" style="margin-left:8px;cursor:pointer" onclick="go('settings')">⚙</button>
 </header>
 
 <div class="wrap">
@@ -232,6 +233,20 @@
     <div id="fishBody"></div>
   </section>
 
+  <!-- SETTINGS -->
+  <section id="view-settings" class="hide">
+    <button class="backbtn" onclick="go('home')">‹ Back</button>
+    <div class="card">
+      <h2 style="margin-top:0">Bite-clip settings</h2>
+      <p class="hint">Controls the hands-free “Watch for bite” video. Say <b>“got a bite”</b> to start recording, then <b>“got him / landed it”</b> to save a catch or <b>“it got away / I missed it”</b> to log a miss. The clip keeps recording the whole fight until you say one of those.</p>
+      <label>Seconds to keep <b>before</b> the bite</label>
+      <input id="setPre" type="number" inputmode="numeric" min="3" max="60" step="1" placeholder="15">
+      <label>Max seconds to record <b>after</b> the bite (safety cap)</label>
+      <input id="setMax" type="number" inputmode="numeric" min="15" max="300" step="5" placeholder="120">
+      <button class="btn" style="margin-top:14px" onclick="saveSettings()">Save</button>
+    </div>
+  </section>
+
 </div>
 
 <nav>
@@ -321,7 +336,7 @@ async function getWeather(lat,lon){
 //// ---------- navigation ----------
 function go(v){
   document.querySelectorAll("video").forEach(el=>{try{el.pause();}catch(e){}});  // stop any playing clip when leaving a screen
-  ["home","setup","catch","history","trip","fish"].forEach(x=>$("view-"+x).classList.toggle("hide",x!==v));
+  ["home","setup","catch","history","trip","fish","settings"].forEach(x=>$("view-"+x).classList.toggle("hide",x!==v));
   ["home","history"].forEach(x=>$("nav-"+x)&&$("nav-"+x).classList.toggle("on",x===v||(x==="history"&&(v==="trip"||v==="fish"))));
   if(v==="home")renderHome();
   if(v==="setup")openSetup();
@@ -329,6 +344,7 @@ function go(v){
   if(v==="history")renderHistory();
   if(v==="trip")renderTrip();
   if(v==="fish")renderFish();
+  if(v==="settings")openPrefs();
   window.scrollTo(0,0);
 }
 
@@ -340,7 +356,7 @@ function renderHome(){
   $("status").textContent=t?("● "+t.water_body):"No trip";
   $("status").classList.toggle("live",!!t);
   $("hTrips").textContent=S.trips.length;
-  $("hFish").textContent=S.catches.length;
+  $("hFish").textContent=S.catches.filter(c=>!c.missed).length;
   if(t){
     $("atWater").textContent=t.water_body||"Trip";
     $("atElapsed").textContent=((Date.now()-t.start)/3.6e6).toFixed(1)+"h";
@@ -348,8 +364,8 @@ function renderHome(){
     $("atWeather").innerHTML=w?`<span>🌡 <b>${w.air_temp}°F</b></span><span>📊 <b>${w.pressure_inHg}"</b> ${w.pressure_trend}</span><span>💨 <b>${w.wind_mph}</b> ${w.wind_dir}</span><span>☁ ${w.sky}</span><span>🌙 ${t.moon}</span>`:`<span class="muted">weather not captured (was offline)</span>`;
     const sp=activeSpot();
     $("atSpot").innerHTML=sp?`<span>📍 <b>${sp.name}</b></span><span>since ${hhmm(new Date(sp.start))}</span>`:`<span class="muted">no spot set</span>`;
-    $("atFish").textContent=S.catches.filter(c=>c.trip===t.id).length;
-    $("atSpotFish").textContent=sp?S.catches.filter(c=>c.spot===sp.id).length:0;
+    $("atFish").textContent=S.catches.filter(c=>c.trip===t.id&&!c.missed).length;
+    $("atSpotFish").textContent=sp?S.catches.filter(c=>c.spot===sp.id&&!c.missed).length:0;
   }
   updateDot();
 }
@@ -469,6 +485,24 @@ async function saveCatch(){
   toast("🐟 saved"); go("home"); syncNow(true);
 }
 
+async function commitBite(blob,landed){
+  const t=activeTrip(); if(!t){toast("Start a trip first");return}
+  let sp=activeSpot(); if(!sp){newSpot(true);sp=activeSpot();}
+  const id="C"+pad(S.catches.length+1,4), now=new Date(), loc=await getLoc();
+  S.catches.push({id,trip:t.id,spot:sp.id,time:hhmm(now),
+    species:landed?"":"Missed bite",length_in:"",length_type:"TL",weight_g:"",weight_oz:"",depth:"",
+    lure:S.prefs.lure||"",color:"",size:"",technique:"",retrieve:"",kept:"",sex:"Unknown",condition:"Healthy",
+    angler:S.prefs.anglers||"",notes:"",lat:(loc&&loc.lat)||"",lon:(loc&&loc.lon)||"",
+    missed:!landed,hasPhoto:false,hasVideo:true,synced:false,photoSynced:false,videoSynced:false});
+  sp.synced=false; save();
+  await putClip(id,blob);
+  toast(landed?"🎣 Catch saved — add details later":"✗ Missed bite logged");
+  renderHome(); syncNow(true);
+}
+function openPrefs(){ $("setPre").value=(S.prefs.clipPre||15); $("setMax").value=(S.prefs.clipMax||120); }
+function saveSettings(){ const p=parseInt($("setPre").value)||15, m=parseInt($("setMax").value)||120;
+  S.prefs.clipPre=Math.max(3,Math.min(60,p)); S.prefs.clipMax=Math.max(15,Math.min(300,m)); save(); toast("Settings saved"); go("home"); }
+
 function newCatch(){editing=null;go("catch");}
 function cancelCatch(){editing=null;go(activeTrip()?"home":"history");}
 function editCatch(id){editing=id;go("catch");}
@@ -483,9 +517,9 @@ function openTrip(id){curTrip=id;go("trip");}
 function openFish(id){curCatch=id;go("fish");}
 
 function tripStats(t){
-  const cs=S.catches.filter(c=>c.trip===t.id);
+  const all=S.catches.filter(c=>c.trip===t.id), cs=all.filter(c=>!c.missed);
   const hrs=(t.end?(t.end-t.start):(Date.now()-t.start))/3.6e6;
-  return{n:cs.length, hrs:hrs.toFixed(1), cpue:hrs>0?(cs.length/hrs).toFixed(2):"0"};
+  return{n:cs.length, miss:all.length-cs.length, hrs:hrs.toFixed(1), cpue:hrs>0?(cs.length/hrs).toFixed(2):"0"};
 }
 
 async function renderHistory(){
@@ -498,16 +532,17 @@ async function renderHistory(){
     return `<div class="card tripcard clickable" onclick="openTrip('${t.id}')">
       <img id="th-${t.id}" alt="">
       <div class="ti"><b>${esc(t.water_body)||"Trip"}</b>${act?' <span class="tag">● live</span>':''}
-        <div class="meta"><span>${t.date}</span><span>🐟 <b>${s.n}</b></span><span>${s.hrs}h</span><span>${s.cpue}/hr</span></div></div>
+        <div class="meta"><span>${t.date}</span><span>🐟 <b>${s.n}</b></span>${s.miss?`<span>✗ ${s.miss}</span>`:''}<span>${s.hrs}h</span><span>${s.cpue}/hr</span></div></div>
       <span class="muted">›</span></div>`;}).join("");
   for(const t of trips){const c=S.catches.find(c=>c.trip===t.id&&c.hasPhoto);if(c){const d=await getPic(c.id);const el=$("th-"+t.id);if(d&&el)el.src=d;}}
 }
 
 function catchRowHTML(c){
-  return `<div class="item clickable" onclick="openFish('${c.id}')">
+  const title=c.missed?"Missed bite":(c.species||"Unlogged catch");
+  return `<div class="item clickable" onclick="openFish('${c.id}')"${c.missed?' style="opacity:.72"':''}>
     <img id="thumb-${c.id}" alt="">
-    <div class="t"><b>${c.species}</b> <span class="tag">${c.length_in||"?"}"</span>${c.hasVideo?' <span class="tag">🎥</span>':''}
-      <div><span>${c.time} · ${esc(c.lure)}${c.weight_g?" · "+c.weight_g+"g":""}${c.synced?"":" · ⏳"}</span></div></div>
+    <div class="t"><b>${title}</b> ${c.missed?'<span class="tag">✗ miss</span>':(c.length_in?`<span class="tag">${c.length_in}"</span>`:'')}${c.hasVideo?' <span class="tag">🎥</span>':''}
+      <div><span>${c.time}${c.lure?" · "+esc(c.lure):""}${c.weight_g?" · "+c.weight_g+"g":""}${c.synced?"":" · ⏳"}</span></div></div>
     <span class="muted">›</span></div>`;
 }
 
@@ -519,7 +554,7 @@ async function renderTrip(){
     <div style="display:flex;align-items:center;gap:8px"><b style="font-size:18px">${esc(t.water_body)||"Trip"}</b>
       <button class="backbtn" style="margin:0;font-size:13px" onclick="editTrip('${t.id}')">✏️</button>
       <span class="tag" style="margin-left:auto">${t.date}</span></div>
-    <div class="meta" style="margin-top:8px"><span>🐟 <b>${s.n}</b> fish</span><span>${s.hrs}h</span><span>${s.cpue}/hr</span>${t.craft?`<span>${t.craft}</span>`:''}</div>
+    <div class="meta" style="margin-top:8px"><span>🐟 <b>${s.n}</b> fish</span>${s.miss?`<span>✗ ${s.miss} missed</span>`:''}<span>${s.hrs}h</span><span>${s.cpue}/hr</span>${t.craft?`<span>${t.craft}</span>`:''}</div>
     ${w.air_temp!=null?`<div class="meta" style="margin-top:6px"><span>🌡 ${w.air_temp}°F</span><span>📊 ${w.pressure_inHg}" ${w.pressure_trend||''}</span><span>💨 ${w.wind_mph} ${w.wind_dir||''}</span><span>☁ ${w.sky||''}</span>${t.moon?`<span>🌙 ${t.moon}</span>`:''}</div>`:''}
   </div>`;
   const spots=S.spots.filter(sp=>sp.trip===t.id);
@@ -545,7 +580,7 @@ async function renderFish(){
   $("fishBack").textContent="‹ "+(t?(t.water_body||"Trip"):"Back");
   const kv=(k,v)=>(v!==""&&v!=null)?`<div class="kv"><span>${k}</span><b>${v}</b></div>`:"";
   box.innerHTML=`<div class="card">
-    <div style="display:flex;align-items:center"><b style="font-size:20px">${c.species}</b>
+    <div style="display:flex;align-items:center"><b style="font-size:20px">${c.species||(c.missed?"Missed bite":"Unlogged catch")}</b>
       <span class="tag" style="margin-left:auto">${c.synced?"☁ synced":"⏳ on phone"}</span></div>
     <div id="fishMedia"></div>
     ${kv("Length",c.length_in?c.length_in+'" '+(c.length_type||""):"")}
@@ -599,9 +634,9 @@ function renderMap(box){
   _map=L.map("catchMap");
   L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:"© OpenStreetMap"}).addTo(_map);
   const bounds=[];
-  pts.forEach(c=>{const col=speciesColor(c.species),r=5+Math.min(9,(parseFloat(c.length_in)||6)/1.8),t=S.trips.find(x=>x.id===c.trip);
-    L.circleMarker([c.lat,c.lon],{radius:r,color:col,fillColor:col,fillOpacity:.8,weight:1})
-      .bindPopup(`<b>${c.species}</b> ${c.length_in||"?"}"<br>${t?t.date+" · ":""}${esc(c.lure||"")}<br><a href="#" onclick="leafOpen('${c.id}');return false;">Open catch ›</a>`)
+  pts.forEach(c=>{const col=c.missed?"#8aa1ad":speciesColor(c.species),r=c.missed?4:5+Math.min(9,(parseFloat(c.length_in)||6)/1.8),t=S.trips.find(x=>x.id===c.trip);
+    L.circleMarker([c.lat,c.lon],{radius:r,color:col,fillColor:col,fillOpacity:c.missed?.5:.8,weight:1})
+      .bindPopup(`<b>${c.species||(c.missed?"Missed bite":"Fish")}</b> ${c.missed?"":(c.length_in||"?")+'"'}<br>${t?t.date+" · ":""}${esc(c.lure||"")}<br><a href="#" onclick="leafOpen('${c.id}');return false;">Open ›</a>`)
       .addTo(_map);
     bounds.push([c.lat,c.lon]);});
   _map.fitBounds(bounds,{padding:[30,30],maxZoom:15});
@@ -642,7 +677,7 @@ function cloudToCatch(r){
     technique:r.technique||"",retrieve:r.retrieve_speed||"",kept:r.kept_released||"",sex:r.sex||"",condition:r.condition||"",
     angler:r.angler||"",notes:r.notes||"",lat:r.lat??"",lon:r.lon??"",
     hasPhoto:!!r.photo_file,hasVideo:!!r.video_file,cloudPhoto:r.photo_file||null,cloudVideo:r.video_file||null,
-    synced:true,photoSynced:true,videoSynced:true};
+    missed:!!r.missed,synced:true,photoSynced:true,videoSynced:true};
 }
 async function restoreFromCloud(auto){
   if(!SB||!SBsession){if(!auto)toast("Cloud not ready — try again in a moment");return}
@@ -705,7 +740,7 @@ function catchRow(c){return clean({id:c.id,trip_id:c.trip,effort_id:c.spot,time:
   kept_released:c.kept,sex:c.sex,condition:c.condition,
   photo_file:c.hasPhoto&&SBsession?(SBsession.user.id+"/"+c.id+".jpg"):null,
   video_file:c.hasVideo&&SBsession?(SBsession.user.id+"/"+c.id+".webm"):null,
-  angler:c.angler,notes:c.notes,lat:c.lat,lon:c.lon})}
+  angler:c.angler,notes:c.notes,lat:c.lat,lon:c.lon,missed:!!c.missed})}
 
 async function syncNow(){
   if(!cloudOn()||!SB||!SBsession||!navigator.onLine||_syncing)return;
@@ -749,14 +784,17 @@ function updateDot(){
  * attached. Pure web — works in Android Chrome. (iOS needs a native wrapper.)
  * ======================================================================== */
 window.FishClip = (function () {
-  const PRE_SECONDS = 30;     // seconds of footage to keep before the bite
-  const SLICE_MS    = 1000;   // recorder emits a chunk this often
-  const PHRASES     = ["got a bite", "fish on", "got one", "got him", "bite"];
+  const SLICE_MS = 1000;      // recorder emits a chunk this often
+  const BITE   = ["got a bite","fish on","got a fish","bite"];
+  const LANDED = ["got him","got her","got one","got em","landed it","landed him","landed","in the net","net him","fish in"];
+  const MISSED = ["got away","get away","got off","came off","missed it","missed him","i missed","lost him","lost it","lost em","spit the hook","threw the hook","shook off"];
+  const preSec = () => { const v = parseInt(S.prefs && S.prefs.clipPre); return v > 0 ? v : 15; };
+  const maxSec = () => { const v = parseInt(S.prefs && S.prefs.clipMax); return v > 0 ? v : 120; };
 
   let stream = null, rec = null, recog = null, wake = null;
   let header = null;          // FIRST chunk = WebM init/header. MUST keep it.
   let chunks = [];            // rolling window of recent media chunks
-  let watching = false;
+  let watching = false, biteActive = false, busy = false;
 
   function pickMime() {
     const want = ["video/webm;codecs=vp9,opus", "video/webm;codecs=vp8,opus",
@@ -772,8 +810,9 @@ window.FishClip = (function () {
       if (!e.data || !e.data.size) return;
       if (!header) { header = e.data; return; }      // header chunk: keep forever
       chunks.push(e.data);
-      const max = Math.ceil(PRE_SECONDS * 1000 / SLICE_MS);
-      while (chunks.length > max) chunks.shift();     // drop oldest, keep ~30s
+      const capSec = biteActive ? maxSec() : preSec();   // during a fight keep up to the cap; otherwise just the pre-roll
+      const max = Math.ceil(capSec * 1000 / SLICE_MS);
+      while (chunks.length > max) chunks.shift();
     };
     rec.start(SLICE_MS);
   }
@@ -785,16 +824,18 @@ window.FishClip = (function () {
     return new Blob([header, ...chunks], { type: mime });
   }
 
-  function onTrigger() {
+  function startBite() {
+    biteActive = true; setBtn();
+    toast("🎣 Fish on — recording… say “got him” or “it got away”");
+  }
+  async function endBite(landed) {
+    if (busy) return; busy = true;
     const blob = grab();
-    if (!blob) { toast("clip not ready yet"); return; }
-    editing=null; go("catch");   // always a NEW catch with the clip
-    setTimeout(() => {           // ...then attach the fresh clip after reset
-      window.pendingClip = blob;
-      const v = document.getElementById("cVidPreview");
-      if (v) { v.src = URL.createObjectURL(blob); v.style.display = "block"; }
-      toast("🎥 bite clip grabbed");
-    }, 0);
+    biteActive = false; header = null; chunks = [];   // reset to a fresh pre-roll window; keep watching
+    setBtn();
+    if (blob && window.commitBite) { try { await window.commitBite(blob, landed); } catch (e) {} }
+    else toast("clip not ready");
+    busy = false;
   }
 
   function startRecog() {
@@ -805,7 +846,9 @@ window.FishClip = (function () {
     recog.onresult = ev => {
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         const txt = ev.results[i][0].transcript.toLowerCase();
-        if (PHRASES.some(p => txt.includes(p))) { onTrigger(); return; }
+        if (!biteActive) { if (BITE.some(p => txt.includes(p))) { startBite(); return; } }
+        else { if (MISSED.some(p => txt.includes(p))) { endBite(false); return; }
+               if (LANDED.some(p => txt.includes(p))) { endBite(true); return; } }
       }
     };
     recog.onend = () => { if (watching) { try { recog.start(); } catch (e) {} } }; // auto-restart
@@ -820,28 +863,31 @@ window.FishClip = (function () {
         audio: true
       });
     } catch (e) { toast("camera/mic blocked"); return; }
-    watching = true;
+    watching = true; biteActive = false;
     startRecorder();
     startRecog();
     try { wake = await navigator.wakeLock.request("screen"); } catch (e) {}
-    setBtn(true);
+    setBtn();
   }
 
   function stop() {
-    watching = false;
+    watching = false; biteActive = false;
     try { rec && rec.state !== "inactive" && rec.stop(); } catch (e) {}
     try { recog && recog.stop(); } catch (e) {}
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (wake) { try { wake.release(); } catch (e) {} wake = null; }
     stream = null; rec = null; header = null; chunks = [];
-    setBtn(false);
+    setBtn();
   }
 
-  function setBtn(on) {
+  function setBtn() {
     const b = document.getElementById("watchBtn");
     if (!b) return;
-    b.textContent = on ? "🎥 Watching… (say “got a bite”)" : "🎥 Watch for bite";
-    b.classList.toggle("green", on);
+    b.textContent = !watching ? "🎥 Watch for bite"
+      : biteActive ? "🎣 Fish on — say “got him” / “it got away”"
+      : "🎥 Watching… (say “got a bite”)";
+    b.classList.toggle("green", watching && !biteActive);
+    b.classList.toggle("warn", biteActive);
   }
 
   // Screen wake locks drop when you tab away; re-acquire when visible again.
