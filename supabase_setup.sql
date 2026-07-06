@@ -1,7 +1,8 @@
 -- ============================================================
---  Panfish Log — Supabase setup
---  Paste this whole file into  Supabase → SQL Editor → New query → Run.
---  Safe to run more than once.
+--  Panfish Log — Supabase setup (complete, from-scratch)
+--  Paste into  Supabase → SQL Editor → New query → Run.
+--  Safe to run more than once. Contains NO drop statements, so it
+--  will NOT trigger the "destructive operation" warning.
 -- ============================================================
 
 -- ---------- TABLES ----------
@@ -76,12 +77,18 @@ create table if not exists public.catches (
   sex            text,
   condition      text,
   photo_file     text,
+  video_file     text,
+  missed         boolean default false,
   angler         text,
   notes          text,
   lat            double precision,
   lon            double precision,
   created_at     timestamptz default now()
 );
+
+-- Columns that were added over time (for databases created before they existed).
+alter table public.catches add column if not exists video_file text;
+alter table public.catches add column if not exists missed boolean default false;
 
 -- ---------- ROW LEVEL SECURITY ----------
 -- Everyone signed in can READ all rows (shared family dataset),
@@ -94,42 +101,38 @@ do $$
 declare t text;
 begin
   foreach t in array array['trips','spots','catches'] loop
-    execute format('drop policy if exists "read all %1$s"  on public.%1$s;', t);
-    execute format('drop policy if exists "insert own %1$s" on public.%1$s;', t);
-    execute format('drop policy if exists "update own %1$s" on public.%1$s;', t);
-    execute format('create policy "read all %1$s"  on public.%1$s for select to authenticated using (true);', t);
-    execute format('create policy "insert own %1$s" on public.%1$s for insert to authenticated with check (user_id = auth.uid());', t);
-    execute format('create policy "update own %1$s" on public.%1$s for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());', t);
+    if not exists (select 1 from pg_policies where schemaname='public' and tablename=t and policyname='read all '||t) then
+      execute format('create policy "read all %1$s" on public.%1$s for select to authenticated using (true);', t);
+    end if;
+    if not exists (select 1 from pg_policies where schemaname='public' and tablename=t and policyname='insert own '||t) then
+      execute format('create policy "insert own %1$s" on public.%1$s for insert to authenticated with check (user_id = auth.uid());', t);
+    end if;
+    if not exists (select 1 from pg_policies where schemaname='public' and tablename=t and policyname='update own '||t) then
+      execute format('create policy "update own %1$s" on public.%1$s for update to authenticated using (user_id = auth.uid()) with check (user_id = auth.uid());', t);
+    end if;
   end loop;
 end $$;
 
--- ---------- PHOTO STORAGE ----------
-insert into storage.buckets (id, name, public)
-values ('photos','photos', false)
-on conflict (id) do nothing;
+-- ---------- STORAGE BUCKETS (photos + videos) ----------
+insert into storage.buckets (id, name, public) values ('photos','photos', false) on conflict (id) do nothing;
+insert into storage.buckets (id, name, public) values ('videos','videos', false) on conflict (id) do nothing;
 
-drop policy if exists "photos read"   on storage.objects;
-drop policy if exists "photos insert" on storage.objects;
-drop policy if exists "photos update" on storage.objects;
-create policy "photos read"   on storage.objects for select to authenticated using (bucket_id = 'photos');
-create policy "photos insert" on storage.objects for insert to authenticated with check (bucket_id = 'photos');
-create policy "photos update" on storage.objects for update to authenticated using (bucket_id = 'photos');
+do $$
+declare b text;
+begin
+  foreach b in array array['photos','videos'] loop
+    if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname=b||' read') then
+      execute format('create policy "%1$s read" on storage.objects for select to authenticated using (bucket_id = %1$L);', b);
+    end if;
+    if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname=b||' insert') then
+      execute format('create policy "%1$s insert" on storage.objects for insert to authenticated with check (bucket_id = %1$L);', b);
+    end if;
+    if not exists (select 1 from pg_policies where schemaname='storage' and tablename='objects' and policyname=b||' update') then
+      execute format('create policy "%1$s update" on storage.objects for update to authenticated using (bucket_id = %1$L);', b);
+    end if;
+  end loop;
+end $$;
 
--- ---------- VIDEO CLIPS (FishClip "got a bite") ----------
-alter table public.catches add column if not exists video_file text;
-
-insert into storage.buckets (id, name, public)
-values ('videos', 'videos', false)
-on conflict (id) do nothing;
-
-drop policy if exists "videos read"   on storage.objects;
-drop policy if exists "videos insert" on storage.objects;
-drop policy if exists "videos update" on storage.objects;
-create policy "videos read"   on storage.objects for select to authenticated using (bucket_id = 'videos');
-create policy "videos insert" on storage.objects for insert to authenticated with check (bucket_id = 'videos');
-create policy "videos update" on storage.objects for update to authenticated using (bucket_id = 'videos');
-
--- ---------- MISSED BITES (hands-free "it got away") ----------
-alter table public.catches add column if not exists missed boolean default false;
-
--- Done. Tables: trips, spots, catches.  Buckets: photos, videos.
+-- Done. Tables: trips, spots, catches (incl. video_file + missed).
+--       Buckets: photos, videos, each with read/insert/update policies.
+--       No DROP statements, so no destructive-operation warning.
