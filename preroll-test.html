@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Pre-roll test (WebCodecs)</title>
+<style>
+  body{margin:0;background:#0d2a36;color:#eaf6f8;font:15px/1.45 -apple-system,system-ui,Arial,sans-serif;padding:14px}
+  h1{font-size:18px}
+  button{font-size:17px;font-weight:700;padding:14px;border:none;border-radius:12px;background:#27d18f;color:#04222a;margin:6px 0;width:100%}
+  button.sec{background:#2fb3c9}
+  button:disabled{opacity:.4}
+  video{width:100%;border-radius:10px;background:#000;margin:8px 0}
+  #log{white-space:pre-wrap;font:12px/1.4 ui-monospace,Menlo,monospace;background:#06202a;border:1px solid #1d5266;border-radius:10px;padding:10px;height:40vh;overflow:auto;margin-top:10px}
+  .ok{color:#27d18f}.err{color:#e0556a}.warn{color:#f0a93b}
+  a{color:#2fb3c9}
+</style>
+</head>
+<body>
+<h1>🎣 Pre-roll test — WebCodecs ring buffer</h1>
+<p style="color:#9fc2cd">1) Tap <b>Start camera</b> and allow access. 2) Let it run ~20 seconds. 3) Tap <b>Save last 15s</b>. If a clip appears and plays, the pipeline works on your phone.</p>
+
+<video id="preview" autoplay playsinline muted></video>
+<button id="startBtn">Start camera</button>
+<button id="saveBtn" class="sec" disabled>Save last 15s</button>
+
+<video id="result" controls playsinline style="display:none"></video>
+<div id="dl"></div>
+
+<div id="log"></div>
+
+<!-- Worker source (read as text, run as a module worker via Blob URL) -->
+<script id="workerSrc" type="text/worker">
+import { Muxer, ArrayBufferTarget } from 'https://cdn.jsdelivr.net/npm/mp4-muxer@5/+esm';
+
+let encoder=null, ring=[], decoderConfig=null, W=0, H=0, MAXS=25, frameN=0, started=false;
+const post=(o,t)=>self.postMessage(o,t||[]);
+
+self.onmessage = async (e)=>{
+  const m=e.data;
+  try{
+    if(m.type==='caps'){
+      post({type:'caps', videoEncoder:(typeof VideoEncoder!=='undefined'),
+        mstp:(typeof MediaStreamTrackProcessor!=='undefined'),
+        audioEncoder:(typeof AudioEncoder!=='undefined')});
+    }
+    else if(m.type==='start'){
+      MAXS=m.max||25;
+      const track=m.track, s=(track.getSettings&&track.getSettings())||{};
+      W=s.width||1280; H=s.height||720;
+      post({type:'log', msg:'worker: track '+W+'x'+H+', MSTP='+(typeof MediaStreamTrackProcessor!=='undefined')});
+      if(typeof MediaStreamTrackProcessor==='undefined'){ post({type:'fatal',msg:'MediaStreamTrackProcessor missing in worker'}); return; }
+
+      const cfg={codec:'avc1.42E01F', width:W, height:H, bitrate:2500000, framerate:30, latencyMode:'realtime', avc:{format:'avc'}};
+      let sup=false; try{ sup=(await VideoEncoder.isConfigSupported(cfg)).supported; }catch(err){ post({type:'log',msg:'isConfigSupported threw: '+err}); }
+      post({type:'log', msg:'avc config supported: '+sup});
+      if(!sup){ post({type:'fatal',msg:'H.264 encode config not supported'}); return; }
+
+      encoder=new VideoEncoder({
+        output:(chunk, meta)=>{
+          if(meta && meta.decoderConfig) decoderConfig=meta.decoderConfig;
+          const data=new ArrayBuffer(chunk.byteLength); chunk.copyTo(data);
+          ring.push({data, key:chunk.type==='key', timestamp:chunk.timestamp, duration:chunk.duration||0});
+          // trim: keep from the last keyframe at/before (now - MAXS)
+          const cutoff=chunk.timestamp - MAXS*1e6;
+          let dropTo=0;
+          for(let i=0;i<ring.length;i++){ if(ring[i].timestamp>=cutoff) break; if(ring[i].key) dropTo=i; }
+          if(dropTo>0) ring.splice(0,dropTo);
+          if(ring.length%15===0){ const span=((ring[ring.length-1].timestamp-ring[0].timestamp)/1e6).toFixed(1);
+            post({type:'stat', n:ring.length, span}); }
+        },
+        error:(err)=>post({type:'log', msg:'encoder error: '+err})
+      });
+      encoder.configure(cfg);
+
+      const proc=new MediaStreamTrackProcessor({track});
+      const reader=proc.readable.getReader();
+      started=true;
+      post({type:'started'});
+      while(true){
+        const {done,value}=await reader.read();
+        if(done) break;
+        const frame=value;
+        try{ encoder.encode(frame, {keyFrame:(frameN%30===0)}); }catch(err){ post({type:'log',msg:'encode threw: '+err}); }
+        frame.close(); frameN++;
+      }
+    }
+    else if(m.type==='save'){
+      if(!started){ post({type:'fail',msg:'not started'}); return; }
+      if(!decoderConfig){ post({type:'fail',msg:'no decoderConfig captured yet (need a keyframe)'}); return; }
+      if(!ring.length){ post({type:'fail',msg:'ring empty'}); return; }
+      const now=ring[ring.length-1].timestamp, startAt=now-(m.pre||15)*1e6;
+      let sIdx=0; for(let i=0;i<ring.length;i++){ if(ring[i].key && ring[i].timestamp<=startAt) sIdx=i; }
+      if(!ring[sIdx].key){ for(let i=0;i<ring.length;i++){ if(ring[i].key){ sIdx=i; break; } } }
+      const sel=ring.slice(sIdx);
+      post({type:'log', msg:'muxing '+sel.length+' chunks, span '+((sel[sel.length-1].timestamp-sel[0].timestamp)/1e6).toFixed(1)+'s'});
+      const muxer=new Muxer({ target:new ArrayBufferTarget(), video:{codec:'avc', width:W, height:H}, fastStart:'in-memory', firstTimestampBehavior:'offset' });
+      for(const it of sel){
+        const chunk=new EncodedVideoChunk({ type: it.key?'key':'delta', timestamp: it.timestamp, duration: it.duration, data: it.data });
+        muxer.addVideoChunk(chunk, { decoderConfig });
+      }
+      muxer.finalize();
+      const buf=muxer.target.buffer;
+      post({type:'clip', buffer:buf, bytes:buf.byteLength}, [buf]);
+    }
+  }catch(err){ post({type:'fatal', msg:String(err&&err.stack||err)}); }
+};
+</script>
+
+<script>
+const $=id=>document.getElementById(id);
+const logBox=$("log");
+function log(msg,cls){ const d=new Date().toLocaleTimeString(); logBox.innerHTML+=`<span class="${cls||''}">[${d}] ${msg}</span>\n`; logBox.scrollTop=logBox.scrollHeight; }
+
+let worker=null, camStream=null;
+
+function makeWorker(){
+  const src=$("workerSrc").textContent;
+  const url=URL.createObjectURL(new Blob([src], {type:"text/javascript"}));
+  const w=new Worker(url, {type:"module"});
+  w.onerror=(e)=>log("WORKER ERROR: "+(e.message||e.filename+':'+e.lineno)+" — likely the mp4-muxer CDN import failed","err");
+  w.onmessage=(e)=>{
+    const m=e.data;
+    if(m.type==='caps'){ log("Capabilities → VideoEncoder:"+m.videoEncoder+"  MediaStreamTrackProcessor(worker):"+m.mstp+"  AudioEncoder:"+m.audioEncoder, m.mstp&&m.videoEncoder?'ok':'err'); }
+    else if(m.type==='log') log(m.msg);
+    else if(m.type==='stat') log("buffer: "+m.n+" chunks, ~"+m.span+"s held", 'ok');
+    else if(m.type==='started'){ log("Recording into ring buffer. Wait ~20s, then Save.", 'ok'); $("saveBtn").disabled=false; }
+    else if(m.type==='fatal'){ log("FATAL: "+m.msg, 'err'); }
+    else if(m.type==='fail'){ log("Save failed: "+m.msg, 'warn'); }
+    else if(m.type==='clip'){
+      log("✓ Clip muxed: "+(m.bytes/1024).toFixed(0)+" KB", 'ok');
+      const blob=new Blob([m.buffer], {type:'video/mp4'});
+      const u=URL.createObjectURL(blob);
+      const r=$("result"); r.src=u; r.style.display='block';
+      $("dl").innerHTML=`<a href="${u}" download="preroll.mp4">⬇ Download preroll.mp4</a>`;
+      log("If the player above plays footage from BEFORE you tapped Save, pre-roll works. ✅", 'ok');
+    }
+  };
+  return w;
+}
+
+$("startBtn").onclick=async ()=>{
+  try{
+    $("startBtn").disabled=true;
+    if(!('VideoEncoder' in window)){ log("This browser has no VideoEncoder (WebCodecs). Can't run.", 'err'); return; }
+    log("Requesting camera…");
+    camStream=await navigator.mediaDevices.getUserMedia({ video:{facingMode:'environment', width:{ideal:1280}, height:{ideal:720}}, audio:false });
+    $("preview").srcObject=camStream;
+    log("Camera on.", 'ok');
+    worker=makeWorker();
+    worker.postMessage({type:'caps'});
+    const track=camStream.getVideoTracks()[0].clone();
+    log("Transferring video track to worker…");
+    worker.postMessage({type:'start', track, max:25}, [track]);
+  }catch(err){ log("Start failed: "+(err&&err.message||err), 'err'); $("startBtn").disabled=false; }
+};
+
+$("saveBtn").onclick=()=>{ log("Saving last 15s…"); worker&&worker.postMessage({type:'save', pre:15}); };
+
+log("Ready. iOS "+(navigator.userAgent.match(/OS (\d+_\d+)/)||['','?'])[1].replace('_','.')+" · "+(window.navigator.standalone?'standalone PWA':'browser tab'));
+if(!('VideoEncoder' in window)) log("⚠ VideoEncoder not found on this browser.", 'warn');
+</script>
+</body>
+</html>
