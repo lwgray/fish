@@ -18,11 +18,10 @@
   }
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%}
-  body{background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif;
-       padding-bottom:env(safe-area-inset-bottom)}
-  .wrap{max-width:560px;margin:0 auto;padding:14px 14px 96px}
-  header{display:flex;align-items:center;gap:8px;padding:calc(12px + env(safe-area-inset-top)) 14px 12px;position:sticky;top:0;
-         background:linear-gradient(180deg,#0d3b4f,#0d2a36);z-index:5;border-bottom:1px solid var(--line)}
+  body{background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif}
+  .wrap{max-width:560px;margin:0 auto;padding:calc(14px + env(safe-area-inset-top)) 14px 158px}
+  .bottombar{position:fixed;left:0;right:0;bottom:0;z-index:6;background:#0a2530;padding-bottom:env(safe-area-inset-bottom)}
+  header{display:flex;align-items:center;gap:8px;padding:8px 14px;background:#0a2530;border-top:1px solid var(--line)}
   header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.3px}
   .pill{font-size:12px;padding:5px 10px;border-radius:999px;background:#0a2530;border:1px solid var(--line);color:var(--muted)}
   #syncDot{margin-left:auto;font-size:11px}
@@ -58,8 +57,7 @@
   .item img{width:52px;height:52px;border-radius:9px;object-fit:cover;background:#06202a}
   .item .t{flex:1;min-width:0}.item .t b{font-size:15px}.item .t span{font-size:12px;color:var(--muted)}
   .tag{font-size:11px;padding:2px 8px;border-radius:999px;background:#0a2530;border:1px solid var(--line);color:var(--muted)}
-  nav{position:fixed;left:0;right:0;bottom:0;display:flex;background:#0a2530;border-top:1px solid var(--line);
-    padding-bottom:env(safe-area-inset-bottom);z-index:6}
+  nav{display:flex;background:#0a2530;border-top:1px solid var(--line)}
   nav button{flex:1;background:none;border:none;color:var(--muted);padding:10px 0 12px;font-size:11px;font-weight:600}
   nav button.on{color:var(--accent)} nav .ico{font-size:22px;display:block}
   nav .fab{flex:0 0 auto;margin:-22px 8px 0;width:66px}
@@ -69,7 +67,7 @@
   .hint{font-size:12px;color:var(--muted);margin-top:6px}
   details summary{cursor:pointer;color:var(--accent);font-weight:600;padding:8px 0;list-style:none}
   details summary::-webkit-details-marker{display:none}
-  .toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%);background:#04221a;color:#bff7e3;
+  .toast{position:fixed;left:50%;bottom:150px;transform:translateX(-50%);background:#04221a;color:#bff7e3;
     border:1px solid var(--accent2);padding:11px 18px;border-radius:999px;font-weight:600;z-index:20;opacity:0;transition:.25s;max-width:90%}
   .toast.show{opacity:1}
   .photo-preview{width:100%;max-height:240px;object-fit:cover;border-radius:12px;margin-top:8px;display:none}
@@ -100,13 +98,6 @@
 </style>
 </head>
 <body>
-<header>
-  <h1>🎣 Panfish Log</h1>
-  <span id="syncDot" class="pill" onclick="showSyncErr()">On phone</span>
-  <span id="status" class="pill">No trip</span>
-  <button id="gearBtn" class="pill" style="margin-left:8px;cursor:pointer" onclick="go('settings')">⚙</button>
-</header>
-
 <div class="wrap">
 
   <!-- HOME -->
@@ -125,23 +116,23 @@
 
     <div id="activeTrip" class="hide">
       <video id="camPreview" class="campreview" playsinline autoplay muted></video>
-      <div class="card">
+      <button class="btn ghost sm" id="watchBtn" onclick="FishClip.toggle()">🎥 Watch for bite</button>
+      <button class="btn big green" style="margin-top:10px" onclick="newCatch()">🐟 Log Catch</button>
+      <div class="row" style="margin-top:10px">
+        <button class="btn ghost sm" onclick="newSpot()">📍 New spot / moved</button>
+        <button class="btn warn sm" onclick="endTrip()">■ End trip</button>
+      </div>
+      <div class="grid2" style="margin-top:12px">
+        <div class="stat"><b id="atFish">0</b><span>Fish this trip</span></div>
+        <div class="stat"><b id="atSpotFish">0</b><span>This spot</span></div>
+      </div>
+      <div class="card" style="margin-top:12px">
         <div style="display:flex;align-items:center"><b id="atWater" style="font-size:18px">—</b>
           <span class="tag" id="atElapsed" style="margin-left:auto">0h</span></div>
         <div class="meta" id="atWeather"></div>
         <div class="meta" id="atSpot" style="margin-top:8px"></div>
       </div>
-      <div class="grid2" style="margin-bottom:12px">
-        <div class="stat"><b id="atFish">0</b><span>Fish this trip</span></div>
-        <div class="stat"><b id="atSpotFish">0</b><span>This spot</span></div>
-      </div>
-      <button class="btn big green" onclick="newCatch()">🐟 Log Catch</button>
-      <button class="btn ghost sm" id="watchBtn" onclick="FishClip.toggle()">🎥 Watch for bite</button>
-      <div class="row" style="margin-top:10px">
-        <button class="btn ghost sm" onclick="newSpot()">📍 New spot / moved</button>
-        <button class="btn warn sm" onclick="endTrip()">■ End trip</button>
-      </div>
-      <p class="hint center">A spot with zero catches still counts — it's valuable data. Just tap “New spot” when you move.</p>
+      <p class="hint center">A spot with zero catches still counts — tap “New spot” when you move.</p>
     </div>
   </section>
 
@@ -268,11 +259,19 @@
 
 </div>
 
-<nav>
-  <button id="nav-home" class="on" onclick="go('home')"><span class="ico">🏠</span>Home</button>
-  <div class="fab"><button onclick="newCatch()"><span class="ico">🐟</span>Catch</button></div>
-  <button id="nav-history" onclick="go('history')"><span class="ico">📋</span>History</button>
-</nav>
+<div class="bottombar">
+  <header>
+    <h1>🎣 Panfish Log</h1>
+    <span id="syncDot" class="pill" onclick="showSyncErr()">On phone</span>
+    <span id="status" class="pill">No trip</span>
+    <button id="gearBtn" class="pill" style="margin-left:8px;cursor:pointer" onclick="go('settings')">⚙</button>
+  </header>
+  <nav>
+    <button id="nav-home" class="on" onclick="go('home')"><span class="ico">🏠</span>Home</button>
+    <button onclick="newCatch()"><span class="ico">🐟</span>Catch</button>
+    <button id="nav-history" onclick="go('history')"><span class="ico">📋</span>History</button>
+  </nav>
+</div>
 
 <div id="toast" class="toast"></div>
 
@@ -367,7 +366,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.06.1";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.06.2";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
