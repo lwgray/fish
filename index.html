@@ -19,7 +19,8 @@
   *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
   html,body{margin:0;height:100%}
   body{background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif}
-  .wrap{max-width:560px;margin:0 auto;padding:calc(14px + env(safe-area-inset-top)) 14px 158px}
+  .wrap{max-width:560px;margin:0 auto;padding:calc(14px + env(safe-area-inset-top)) 14px calc(74px + env(safe-area-inset-bottom))}
+  .brand{font-size:22px;align-self:center;padding:0 8px 0 4px;flex:0 0 auto}
   .bottombar{position:fixed;left:0;right:0;bottom:0;z-index:6;background:#0a2530;padding-bottom:env(safe-area-inset-bottom)}
   header{display:flex;align-items:center;gap:8px;padding:8px 14px;background:#0a2530;border-top:1px solid var(--line)}
   header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.3px}
@@ -67,11 +68,11 @@
   .hint{font-size:12px;color:var(--muted);margin-top:6px}
   details summary{cursor:pointer;color:var(--accent);font-weight:600;padding:8px 0;list-style:none}
   details summary::-webkit-details-marker{display:none}
-  .toast{position:fixed;left:50%;bottom:150px;transform:translateX(-50%);background:#04221a;color:#bff7e3;
+  .toast{position:fixed;left:50%;bottom:calc(84px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#04221a;color:#bff7e3;
     border:1px solid var(--accent2);padding:11px 18px;border-radius:999px;font-weight:600;z-index:20;opacity:0;transition:.25s;max-width:90%}
   .toast.show{opacity:1}
   .photo-preview{width:100%;max-height:240px;object-fit:cover;border-radius:12px;margin-top:8px;display:none}
-  .campreview{width:100%;max-height:40vh;object-fit:cover;border-radius:12px;margin:0 0 12px;background:#000;display:none}
+  .campreview{width:100%;max-height:40vh;object-fit:cover;border-radius:12px;margin:12px 0;background:#000;display:none}
   .campreview.on{display:block}
   .updbanner{position:fixed;top:0;left:0;right:0;z-index:60;background:var(--accent2);color:#04222a;font-weight:700;text-align:center;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;font-size:14px}
   .updbanner button{background:#04222a;color:var(--accent2);border:none;border-radius:8px;padding:6px 12px;font-weight:700;margin-left:8px}
@@ -115,13 +116,13 @@
     </div>
 
     <div id="activeTrip" class="hide">
-      <video id="camPreview" class="campreview" playsinline autoplay muted></video>
-      <button class="btn ghost sm" id="watchBtn" onclick="FishClip.toggle()">🎥 Watch for bite</button>
-      <button class="btn big green" style="margin-top:10px" onclick="newCatch()">🐟 Log Catch</button>
+      <button class="btn big green" id="watchBtn" onclick="FishClip.toggle()">🎥 Watch for bite</button>
       <div class="row" style="margin-top:10px">
-        <button class="btn ghost sm" onclick="newSpot()">📍 New spot / moved</button>
+        <button class="btn ghost sm" onclick="newSpot()">📍 New spot</button>
         <button class="btn warn sm" onclick="endTrip()">■ End trip</button>
       </div>
+      <video id="camPreview" class="campreview" playsinline autoplay muted></video>
+      <button class="btn green" onclick="newCatch()">🐟 Log Catch</button>
       <div class="grid2" style="margin-top:12px">
         <div class="stat"><b id="atFish">0</b><span>Fish this trip</span></div>
         <div class="stat"><b id="atSpotFish">0</b><span>This spot</span></div>
@@ -242,6 +243,10 @@
   <!-- SETTINGS -->
   <section id="view-settings" class="hide">
     <button class="backbtn" onclick="go('home')">‹ Back</button>
+    <div class="card" style="display:flex;align-items:center;gap:10px">
+      <b>Cloud sync</b>
+      <span id="syncDot" class="pill" onclick="showSyncErr()" style="margin-left:auto">On phone</span>
+    </div>
     <div class="card">
       <h2 style="margin-top:0">Bite-clip settings</h2>
       <p class="hint">Controls the hands-free “Watch for bite” video. Say <b>“got a bite”</b> to start recording, then <b>“got him / landed it”</b> to save a catch or <b>“it got away / I missed it”</b> to log a miss. The clip keeps recording the whole fight until you say one of those.</p>
@@ -260,16 +265,12 @@
 </div>
 
 <div class="bottombar">
-  <header>
-    <h1>🎣 Panfish Log</h1>
-    <span id="syncDot" class="pill" onclick="showSyncErr()">On phone</span>
-    <span id="status" class="pill">No trip</span>
-    <button id="gearBtn" class="pill" style="margin-left:8px;cursor:pointer" onclick="go('settings')">⚙</button>
-  </header>
   <nav>
+    <span class="brand">🎣</span>
     <button id="nav-home" class="on" onclick="go('home')"><span class="ico">🏠</span>Home</button>
     <button onclick="newCatch()"><span class="ico">🐟</span>Catch</button>
     <button id="nav-history" onclick="go('history')"><span class="ico">📋</span>History</button>
+    <button id="nav-settings" onclick="go('settings')"><span class="ico">⚙</span>Settings</button>
   </nav>
 </div>
 
@@ -366,7 +367,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.06.2";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.06.3";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -456,8 +457,6 @@ function renderHome(){
   const t=activeTrip();
   $("noTrip").classList.toggle("hide",!!t);
   $("activeTrip").classList.toggle("hide",!t);
-  $("status").textContent=t?("● "+t.water_body):"No trip";
-  $("status").classList.toggle("live",!!t);
   $("hTrips").textContent=S.trips.length;
   $("hFish").textContent=S.catches.filter(c=>!c.missed).length;
   if(t){
@@ -471,6 +470,7 @@ function renderHome(){
     $("atSpotFish").textContent=sp?S.catches.filter(c=>c.spot===sp.id&&!c.missed).length:0;
   }
   updateDot();
+  if(window.FishClip)FishClip.refreshPreview();
 }
 
 //// ---------- trip / spot ----------
@@ -683,7 +683,7 @@ async function commitBite(blob,landed){
   toast(landed?"🎣 Catch saved — add details later":"✗ Missed bite logged");
   renderHome(); syncNow(true);
 }
-function openPrefs(){ $("setPre").value=(S.prefs.clipPre||15); $("setMax").value=(S.prefs.clipMax||120); renderFavs(); }
+function openPrefs(){ $("setPre").value=(S.prefs.clipPre||15); $("setMax").value=(S.prefs.clipMax||120); renderFavs(); updateDot(); }
 function saveSettings(){ const p=parseInt($("setPre").value)||15, m=parseInt($("setMax").value)||120;
   S.prefs.clipPre=Math.max(3,Math.min(60,p)); S.prefs.clipMax=Math.max(15,Math.min(300,m)); save(); toast("Settings saved"); go("home"); }
 
@@ -1096,7 +1096,13 @@ window.FishClip = (function () {
     }
   });
 
-  return { start, stop, toggle() { watching ? stop() : start(); }, get watching() { return watching; } };
+  function refreshPreview() {
+    const pv = document.getElementById("camPreview");
+    if (!pv) return;
+    if (watching && stream) { pv.srcObject = stream; pv.classList.add("on"); if (pv.play) pv.play().catch(() => {}); }
+    else { pv.srcObject = null; pv.classList.remove("on"); }
+  }
+  return { start, stop, toggle() { watching ? stop() : start(); }, get watching() { return watching; }, refreshPreview };
 })();
 
 //// ---------- update check ----------
