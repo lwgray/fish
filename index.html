@@ -98,7 +98,7 @@
 <body>
 <header>
   <h1>🎣 Panfish Log</h1>
-  <span id="syncDot" class="pill">On phone</span>
+  <span id="syncDot" class="pill" onclick="showSyncErr()">On phone</span>
   <span id="status" class="pill">No trip</span>
   <button id="gearBtn" class="pill" style="margin-left:8px;cursor:pointer" onclick="go('settings')">⚙</button>
 </header>
@@ -273,59 +273,84 @@
 
 <script id="fcWorker" type="text/worker">
 import { Muxer, ArrayBufferTarget } from 'https://cdn.jsdelivr.net/npm/mp4-muxer@5/+esm';
-let encoder=null, ring=[], decoderConfig=null, W=0, H=0, frameN=0;
+let vEnc=null, aEnc=null, vRing=[], aRing=[], vConfig=null, aConfig=null;
+let W=0, H=0, rot=0, frameN=0, aRate=48000, aCh=1;
 let PRE=15, MAX=120, biteActive=false, biteTs=0;
 const post=(o,t)=>self.postMessage(o,t||[]);
-function trim(nowTs){
+function trimRing(ring,nowTs){
   const retainS = biteActive ? (PRE+MAX) : (PRE+5);
   const cutoff = nowTs - retainS*1e6;
   let dropTo=0;
   for(let i=0;i<ring.length;i++){ if(ring[i].timestamp>=cutoff) break; if(ring[i].key) dropTo=i; }
   if(dropTo>0) ring.splice(0,dropTo);
 }
+async function runVideo(track){
+  const s=(track.getSettings&&track.getSettings())||{};
+  W=s.width||1280; H=s.height||720;
+  const cfg={codec:'avc1.42E01F',width:W,height:H,bitrate:2500000,framerate:30,latencyMode:'realtime',avc:{format:'avc'}};
+  let sup=false; try{ sup=(await VideoEncoder.isConfigSupported(cfg)).supported; }catch(err){}
+  if(!sup){ post({type:'fatal',msg:'H.264 encode unsupported'}); return; }
+  vEnc=new VideoEncoder({
+    output:(chunk,meta)=>{ if(meta&&meta.decoderConfig) vConfig=meta.decoderConfig;
+      const data=new ArrayBuffer(chunk.byteLength); chunk.copyTo(data);
+      vRing.push({data,key:chunk.type==='key',timestamp:chunk.timestamp,duration:chunk.duration||0}); trimRing(vRing,chunk.timestamp); },
+    error:(err)=>post({type:'log',msg:'venc '+err})
+  });
+  vEnc.configure(cfg);
+  const proc=new MediaStreamTrackProcessor({track}); const reader=proc.readable.getReader();
+  post({type:'started'});
+  while(true){ const {done,value}=await reader.read(); if(done)break;
+    if(frameN===0 && typeof value.rotation==='number') rot=value.rotation;
+    try{ vEnc.encode(value,{keyFrame:(frameN%30===0)}); }catch(err){}
+    value.close(); frameN++; }
+}
+async function runAudio(track){
+  try{
+    if(typeof AudioEncoder==='undefined') return;
+    aEnc=new AudioEncoder({
+      output:(chunk,meta)=>{ if(meta&&meta.decoderConfig) aConfig=meta.decoderConfig;
+        const data=new ArrayBuffer(chunk.byteLength); chunk.copyTo(data);
+        aRing.push({data,key:true,timestamp:chunk.timestamp,duration:chunk.duration||0}); trimRing(aRing,chunk.timestamp); },
+      error:(err)=>post({type:'log',msg:'aenc '+err})
+    });
+    const proc=new MediaStreamTrackProcessor({track}); const reader=proc.readable.getReader();
+    let cfgd=false;
+    while(true){ const {done,value}=await reader.read(); if(done)break;
+      if(!cfgd){ aRate=value.sampleRate||48000; aCh=value.numberOfChannels||1;
+        try{ aEnc.configure({codec:'mp4a.40.2',sampleRate:aRate,numberOfChannels:aCh,bitrate:128000}); cfgd=true; }catch(e){ value.close(); return; } }
+      try{ aEnc.encode(value); }catch(e){}
+      value.close(); }
+  }catch(e){ post({type:'log',msg:'audio '+e}); }
+}
 self.onmessage=async(e)=>{
   const m=e.data;
   try{
     if(m.type==='start'){
       PRE=m.pre||15; MAX=m.max||120;
-      const track=m.track, s=(track.getSettings&&track.getSettings())||{};
-      W=s.width||1280; H=s.height||720;
       if(typeof MediaStreamTrackProcessor==='undefined'){ post({type:'fatal',msg:'no frame processor'}); return; }
-      const cfg={codec:'avc1.42E01F',width:W,height:H,bitrate:2500000,framerate:30,latencyMode:'realtime',avc:{format:'avc'}};
-      let sup=false; try{ sup=(await VideoEncoder.isConfigSupported(cfg)).supported; }catch(err){}
-      if(!sup){ post({type:'fatal',msg:'H.264 encode unsupported'}); return; }
-      encoder=new VideoEncoder({
-        output:(chunk,meta)=>{
-          if(meta&&meta.decoderConfig) decoderConfig=meta.decoderConfig;
-          const data=new ArrayBuffer(chunk.byteLength); chunk.copyTo(data);
-          ring.push({data,key:chunk.type==='key',timestamp:chunk.timestamp,duration:chunk.duration||0});
-          trim(chunk.timestamp);
-        },
-        error:(err)=>post({type:'log',msg:'enc '+err})
-      });
-      encoder.configure(cfg);
-      const proc=new MediaStreamTrackProcessor({track});
-      const reader=proc.readable.getReader();
-      post({type:'started'});
-      while(true){ const {done,value}=await reader.read(); if(done)break;
-        try{ encoder.encode(value,{keyFrame:(frameN%30===0)}); }catch(err){}
-        value.close(); frameN++; }
+      runVideo(m.track);
+      if(m.audioTrack) runAudio(m.audioTrack);
     }
-    else if(m.type==='bite'){ PRE=m.pre||PRE; biteActive=true; biteTs=ring.length?ring[ring.length-1].timestamp:0; }
+    else if(m.type==='bite'){ PRE=m.pre||PRE; biteActive=true; biteTs=vRing.length?vRing[vRing.length-1].timestamp:0; }
     else if(m.type==='save'){
       biteActive=false;
-      if(!decoderConfig||!ring.length){ post({type:'clip',buffer:null}); return; }
-      const startAt=(biteTs||ring[ring.length-1].timestamp)-(m.pre||PRE)*1e6;
-      let sIdx=0; for(let i=0;i<ring.length;i++){ if(ring[i].key&&ring[i].timestamp<=startAt) sIdx=i; }
-      if(!ring[sIdx].key){ for(let i=0;i<ring.length;i++){ if(ring[i].key){ sIdx=i; break; } } }
-      const sel=ring.slice(sIdx);
-      const muxer=new Muxer({target:new ArrayBufferTarget(),video:{codec:'avc',width:W,height:H},fastStart:'in-memory',firstTimestampBehavior:'offset'});
-      for(const it of sel){ muxer.addVideoChunk(new EncodedVideoChunk({type:it.key?'key':'delta',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig}); }
+      if(!vConfig||!vRing.length){ post({type:'clip',buffer:null}); return; }
+      const nowTs=vRing[vRing.length-1].timestamp;
+      const startAt=(biteTs||nowTs)-(m.pre||PRE)*1e6;
+      let vs=0; for(let i=0;i<vRing.length;i++){ if(vRing[i].key&&vRing[i].timestamp<=startAt) vs=i; }
+      if(!vRing[vs].key){ for(let i=0;i<vRing.length;i++){ if(vRing[i].key){ vs=i; break; } } }
+      const vsel=vRing.slice(vs), clipStart=vsel[0].timestamp;
+      const haveAudio=!!(aConfig && aRing.length);
+      const opts={target:new ArrayBufferTarget(),video:{codec:'avc',width:W,height:H,rotation:rot||0},fastStart:'in-memory',firstTimestampBehavior:'offset'};
+      if(haveAudio) opts.audio={codec:'aac',numberOfChannels:aCh,sampleRate:aRate};
+      const muxer=new Muxer(opts);
+      for(const it of vsel){ muxer.addVideoChunk(new EncodedVideoChunk({type:it.key?'key':'delta',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:vConfig}); }
+      if(haveAudio){ for(const it of aRing){ if(it.timestamp<clipStart-2e5 || it.timestamp>nowTs+2e5) continue;
+        muxer.addAudioChunk(new EncodedAudioChunk({type:'key',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:aConfig}); } }
       muxer.finalize();
       const buf=muxer.target.buffer;
-      post({type:'clip',buffer:buf,bytes:buf.byteLength},[buf]);
+      post({type:'clip',buffer:buf,bytes:buf.byteLength,audio:haveAudio,rot},[buf]);
     }
-    else if(m.type==='reset'){ biteActive=false; }
   }catch(err){ post({type:'fatal',msg:String(err)}); }
 };
 </script>
@@ -854,7 +879,7 @@ async function restoreFromCloud(auto){
 //// BACKGROUND SYNC — silent, no UI. Fill EMBED once and data just flows.
 //// =================================================================
 const EMBED={url:"https://juciqeioewxyoisfhqzw.supabase.co",key:"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imp1Y2lxZWlvZXd4eW9pc2ZocXp3Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODI1MjA4MTcsImV4cCI6MjA5ODA5NjgxN30.tkmVr_L5bFWpQCicPIVI44HqE0OftBfFiy-l5iOUWFE"};
-let SB=null, SBsession=null, _syncing=false, _syncErr=false;
+let SB=null, SBsession=null, _syncing=false, _syncErr=false, _syncErrMsg="";
 function cloudOn(){return !!(EMBED.url&&EMBED.key)}
 
 function initSB(){
@@ -891,7 +916,7 @@ function catchRow(c){return clean({id:c.id,trip_id:c.trip,effort_id:c.spot,time:
   lure_bait:c.lure,lure_color:c.color,lure_size:c.size,technique:c.technique,retrieve_speed:c.retrieve,
   kept_released:c.kept,sex:c.sex,condition:c.condition,
   photo_file:c.hasPhoto&&SBsession?(SBsession.user.id+"/"+c.id+".jpg"):null,
-  video_file:c.hasVideo&&SBsession?(SBsession.user.id+"/"+c.id+".webm"):null,
+  video_file:c.hasVideo&&SBsession?(SBsession.user.id+"/"+c.id+".mp4"):null,
   angler:c.angler,notes:c.notes,lat:c.lat,lon:c.lon,missed:!!c.missed})}
 
 async function syncNow(){
@@ -903,20 +928,18 @@ async function syncNow(){
       if(pending.length){const {error}=await SB.from(table).upsert(pending.map(mapper));if(error)throw error;pending.forEach(x=>x.synced=true);}
     }
     for(const c of S.catches.filter(c=>c.hasPhoto&&!c.photoSynced)){
-      const d=await getPic(c.id); if(!d)continue;
-      const blob=await (await fetch(d)).blob();
-      const {error}=await SB.storage.from("photos").upload(SBsession.user.id+"/"+c.id+".jpg",blob,{upsert:true,contentType:"image/jpeg"});
-      if(!error)c.photoSynced=true;
+      try{ const d=await getPic(c.id); if(!d)continue;
+        const blob=await (await fetch(d)).blob();
+        const {error}=await SB.storage.from("photos").upload(SBsession.user.id+"/"+c.id+".jpg",blob,{upsert:true,contentType:"image/jpeg"});
+        if(!error)c.photoSynced=true; }catch(e){}   // a media upload must never red the whole sync
     }
     for(const c of S.catches.filter(c=>c.hasVideo&&!c.videoSynced)){
-      const blob=await getClip(c.id); if(!blob)continue;
-      const {error}=await SB.storage.from("videos").upload(
-        SBsession.user.id+"/"+c.id+".webm", blob,
-        {upsert:true, contentType:blob.type||"video/webm"});
-      if(!error)c.videoSynced=true;
+      try{ const blob=await getClip(c.id); if(!blob)continue;
+        const {error}=await SB.storage.from("videos").upload(SBsession.user.id+"/"+c.id+".mp4", blob,{upsert:true, contentType:blob.type||"video/mp4"});
+        if(!error)c.videoSynced=true; }catch(e){}
     }
-    save(); _syncErr=false;
-  }catch(e){_syncErr=true;}
+    save(); _syncErr=false; _syncErrMsg="";
+  }catch(e){_syncErr=true; _syncErrMsg=(e&&(e.message||e.msg))||String(e);}
   _syncing=false; updateDot();
 }
 
@@ -929,6 +952,7 @@ function updateDot(){
   else if(pend===0){d.textContent="✓ Synced";d.className="pill ok";}
   else{d.textContent="Saving "+pend;d.className="pill pend";}
 }
+function showSyncErr(){ if(_syncErr&&_syncErrMsg) toast("Sync error: "+_syncErrMsg); else { toast("Syncing…"); syncNow(); } }
 
 /* ===== FishClip: hands-free "got a bite" video clipper ===================
  * Keeps a rolling ~30s camera buffer while fishing. On the trigger phrase
@@ -959,8 +983,11 @@ window.FishClip = (function () {
       if (m.type === "fatal") toast("clip engine: " + m.msg);
       else if (m.type === "clip") finishClip(m.buffer);
     };
-    const track = stream.getVideoTracks()[0].clone();
-    worker.postMessage({ type: "start", track, pre: preSec(), max: maxSec() }, [track]);
+    const vtrack = stream.getVideoTracks()[0].clone();
+    const atracks = stream.getAudioTracks();
+    const atrack = atracks.length ? atracks[0].clone() : null;
+    const transfer = atrack ? [vtrack, atrack] : [vtrack];
+    worker.postMessage({ type: "start", track: vtrack, audioTrack: atrack, pre: preSec(), max: maxSec() }, transfer);
   }
   function finishClip(buffer) {
     clearTimeout(saveTimer);
