@@ -422,23 +422,55 @@ function saveSpot(asHome){
 function dist(la1,lo1,la2,lo2){const R=6371000,rl=x=>x*Math.PI/180,dLa=rl(la2-la1),dLo=rl(lo2-lo1),
   a=Math.sin(dLa/2)**2+Math.cos(rl(la1))*Math.cos(rl(la2))*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(a));}
 function placeKind(t){if(t.leisure==="park")return"🌳";if(t.waterway)return"🏞";if(t.landuse==="reservoir"||t.water==="reservoir")return"🌊";return"💧";}
+async function fetchTimeout(url,opts,ms){
+  const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),ms||14000);
+  try{ return await fetch(url,{...opts,signal:ctrl.signal}); } finally{ clearTimeout(to); }
+}
+async function overpassNearby(loc){
+  const A=`nwr(around:8000,${loc.lat},${loc.lon})`;
+  const q=`[out:json][timeout:20];(${A}[natural=water][name];${A}[water][name];${A}[waterway~"^(river|stream|canal|ditch)$"][name];${A}[landuse=reservoir][name];${A}[leisure=park][name];);out tags center 80;`;
+  const eps=["https://overpass-api.de/api/interpreter","https://overpass.kumi.systems/api/interpreter","https://overpass.private.coffee/api/interpreter"];
+  for(const ep of eps){
+    try{
+      const r=await fetchTimeout(ep,{method:"POST",body:q},15000);
+      if(!r.ok)continue;
+      const j=await r.json();
+      if(j.remark && (!j.elements||!j.elements.length))continue;   // server error/busy → try next mirror
+      const seen=new Set(), items=[];
+      (j.elements||[]).forEach(e=>{const nm=e.tags&&e.tags.name; if(!nm||seen.has(nm))return; seen.add(nm);
+        const la=e.lat??(e.center&&e.center.lat), lo=e.lon??(e.center&&e.center.lon); if(la==null)return;
+        items.push({name:nm,d:dist(loc.lat,loc.lon,la,lo),kind:placeKind(e.tags)});});
+      items.sort((a,b)=>a.d-b.d);
+      return items;                                                 // may be [] = genuinely nothing named nearby
+    }catch(e){/* timeout/CORS/parse → try next mirror */}
+  }
+  return null;                                                      // null = every endpoint failed
+}
+async function nominatimNearest(loc){
+  try{
+    const r=await fetchTimeout(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=15&lat=${loc.lat}&lon=${loc.lon}`,{headers:{Accept:"application/json"}},12000);
+    if(!r.ok)return null;
+    const j=await r.json(), a=j.address||{};
+    const nm=j.name||a.water||a.lake||a.river||a.reservoir||a.park||a.hamlet||a.village||a.neighbourhood||a.suburb||a.town||a.city||null;
+    return nm?{name:nm,d:0,kind:"📍"}:null;
+  }catch(e){return null}
+}
+function renderNearbyList(box,note){
+  box.innerHTML=(note?`<div class="hint" style="margin-bottom:6px">${note}</div>`:"")+_nearby.map((p,i)=>`<div class="item clickable" onclick="pickNearby(${i})"><div class="t"><b>${p.kind} ${esc(p.name)}</b>${p.d?`<div><span>${(p.d/1609.34).toFixed(1)} mi</span></div>`:""}</div><span class="muted">›</span></div>`).join("");
+}
 async function findNearby(){
   const box=$("nearbyList");
   const loc=window._setupLoc||await getLoc();
   if(!loc){toast("No GPS yet");return}
   if(!navigator.onLine){box.innerHTML='<div class="hint">Nearby needs a signal — type the spot in instead.</div>';return}
   box.innerHTML='<div class="hint">Finding nearby waters…</div>';
-  const A=`nwr(around:4000,${loc.lat},${loc.lon})`;
-  const q=`[out:json][timeout:20];(${A}[natural=water][name];${A}[waterway~"^(river|stream|canal|ditch)$"][name];${A}[landuse=reservoir][name];${A}[leisure=park][name];);out center tags 60;`;
-  try{
-    const r=await fetch("https://overpass-api.de/api/interpreter",{method:"POST",body:q});
-    const j=await r.json(); const seen=new Set(), items=[];
-    (j.elements||[]).forEach(e=>{const nm=e.tags&&e.tags.name; if(!nm||seen.has(nm))return; seen.add(nm);
-      const la=e.lat??(e.center&&e.center.lat), lo=e.lon??(e.center&&e.center.lon); if(la==null)return;
-      items.push({name:nm,d:dist(loc.lat,loc.lon,la,lo),kind:placeKind(e.tags)});});
-    items.sort((a,b)=>a.d-b.d); _nearby=items.slice(0,15);
-    box.innerHTML=_nearby.length?_nearby.map((p,i)=>`<div class="item clickable" onclick="pickNearby(${i})"><div class="t"><b>${p.kind} ${esc(p.name)}</b><div><span>${(p.d/1609.34).toFixed(1)} mi</span></div></div><span class="muted">›</span></div>`).join(""):'<div class="hint">No named places found nearby. Type it in and ★ Save for next time.</div>';
-  }catch(e){box.innerHTML='<div class="hint">Couldn’t reach the map service — type the spot in instead.</div>';}
+  const items=await overpassNearby(loc);
+  if(items&&items.length){ _nearby=items.slice(0,20); renderNearbyList(box); return; }
+  const one=await nominatimNearest(loc);        // fallback: at least the nearest named place
+  if(one){ _nearby=[one]; renderNearbyList(box,"Nearest place we could find (★ Save to reuse):"); return; }
+  box.innerHTML=(items===null)
+    ? '<div class="hint">Map service is busy right now — try again in a moment, or type the spot in and ★ Save it.</div>'
+    : '<div class="hint">No named places within ~5 miles. Type it in and ★ Save for next time.</div>';
 }
 function pickNearby(i){const p=_nearby[i]; if(p){$("sWater").value=p.name; $("nearbyList").innerHTML=""; toast("Set: "+p.name);}}
 function renderFavs(){
