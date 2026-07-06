@@ -21,7 +21,7 @@
   body{background:var(--bg);color:var(--text);font:16px/1.4 -apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif;
        padding-bottom:env(safe-area-inset-bottom)}
   .wrap{max-width:560px;margin:0 auto;padding:14px 14px 96px}
-  header{display:flex;align-items:center;gap:8px;padding:12px 14px;position:sticky;top:0;
+  header{display:flex;align-items:center;gap:8px;padding:calc(12px + env(safe-area-inset-top)) 14px 12px;position:sticky;top:0;
          background:linear-gradient(180deg,#0d3b4f,#0d2a36);z-index:5;border-bottom:1px solid var(--line)}
   header h1{font-size:18px;margin:0;font-weight:700;letter-spacing:.3px}
   .pill{font-size:12px;padding:5px 10px;border-radius:999px;background:#0a2530;border:1px solid var(--line);color:var(--muted)}
