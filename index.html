@@ -73,8 +73,10 @@
     border:1px solid var(--accent2);padding:11px 18px;border-radius:999px;font-weight:600;z-index:20;opacity:0;transition:.25s;max-width:90%}
   .toast.show{opacity:1}
   .photo-preview{width:100%;max-height:240px;object-fit:cover;border-radius:12px;margin-top:8px;display:none}
-  .campreview{width:100%;max-height:34vh;object-fit:cover;border-radius:12px;margin-top:10px;background:#000;display:none}
+  .campreview{width:100%;max-height:40vh;object-fit:cover;border-radius:12px;margin:0 0 12px;background:#000;display:none}
   .campreview.on{display:block}
+  .updbanner{position:fixed;top:0;left:0;right:0;z-index:60;background:var(--accent2);color:#04222a;font-weight:700;text-align:center;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;font-size:14px}
+  .updbanner button{background:#04222a;color:var(--accent2);border:none;border-radius:8px;padding:6px 12px;font-weight:700;margin-left:8px}
   .clickable{cursor:pointer}
   .tripcard{display:flex;gap:12px;align-items:center}
   .tripcard img{width:60px;height:60px;border-radius:10px;object-fit:cover;background:#06202a;flex:0 0 auto}
@@ -122,6 +124,7 @@
     </div>
 
     <div id="activeTrip" class="hide">
+      <video id="camPreview" class="campreview" playsinline autoplay muted></video>
       <div class="card">
         <div style="display:flex;align-items:center"><b id="atWater" style="font-size:18px">—</b>
           <span class="tag" id="atElapsed" style="margin-left:auto">0h</span></div>
@@ -134,7 +137,6 @@
       </div>
       <button class="btn big green" onclick="newCatch()">🐟 Log Catch</button>
       <button class="btn ghost sm" id="watchBtn" onclick="FishClip.toggle()">🎥 Watch for bite</button>
-      <video id="camPreview" class="campreview" playsinline autoplay muted></video>
       <div class="row" style="margin-top:10px">
         <button class="btn ghost sm" onclick="newSpot()">📍 New spot / moved</button>
         <button class="btn warn sm" onclick="endTrip()">■ End trip</button>
@@ -365,6 +367,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
+const APP_VERSION="2026.07.06.1";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -1097,10 +1100,29 @@ window.FishClip = (function () {
   return { start, stop, toggle() { watching ? stop() : start(); }, get watching() { return watching; } };
 })();
 
+//// ---------- update check ----------
+async function checkForUpdate(){
+  try{
+    const r=await fetch(location.pathname+"?u="+Date.now(),{cache:"no-store"});
+    const t=await r.text();
+    const m=t.match(/APP_VERSION="([^"]+)"/);
+    if(m && m[1] && m[1]!==APP_VERSION) showUpdate();
+  }catch(e){}
+}
+function showUpdate(){
+  if($("updBanner"))return;
+  const d=document.createElement("div"); d.id="updBanner"; d.className="updbanner";
+  d.innerHTML='🆕 New version available <button onclick="location.reload()">Reload</button>';
+  document.body.appendChild(d);
+}
+
 //// ---------- boot ----------
 go("home");
 window.addEventListener("load",initSB);
 window.addEventListener("online",()=>syncNow());
+setTimeout(checkForUpdate,4000);
+setInterval(checkForUpdate,900000);
+document.addEventListener("visibilitychange",()=>{ if(document.visibilityState==="visible") checkForUpdate(); });
 </script>
 </body>
 </html>
