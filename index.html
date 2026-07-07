@@ -121,6 +121,7 @@
         <button class="btn ghost sm" style="padding:8px 4px;font-size:13px" onclick="newSpot()">New spot</button>
         <button class="btn warn sm" style="padding:8px 4px;font-size:13px" onclick="endTrip()">End trip</button>
       </div>
+      <div id="fcDbg" style="text-align:center;font-size:12px;color:#f0a93b;min-height:15px;margin:4px 0"></div>
       <video id="camPreview" class="campreview" playsinline autoplay muted></video>
       <button class="btn green" onclick="newCatch()">🐟 Log Catch</button>
       <div class="grid2" style="margin-top:12px">
@@ -377,7 +378,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.06.7";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.06.8";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -411,6 +412,7 @@ async function getClip(id) { const d = await db(); if (!d) return null; return n
 const $=id=>document.getElementById(id);
 const pad=(n,w)=>String(n).padStart(w,"0");
 function toast(m){const t=$("toast");t.textContent=m;t.classList.add("show");setTimeout(()=>t.classList.remove("show"),2800)}
+function dbg(m){const d=document.getElementById("fcDbg");if(d)d.textContent=m;}
 function hhmm(d){return pad(d.getHours(),2)+":"+pad(d.getMinutes(),2)}
 function ymd(d){return d.getFullYear()+"-"+pad(d.getMonth()+1,2)+"-"+pad(d.getDate(),2)}
 function compass(deg){if(deg==null)return"";return["N","NE","E","SE","S","SW","W","NW"][Math.round(deg/45)%8]}
@@ -998,8 +1000,8 @@ window.FishClip = (function () {
     worker.onerror = () => toast("clip engine failed to load");
     worker.onmessage = e => {
       const m = e.data;
-      if (m.type === "fatal") toast("clip engine: " + m.msg);
-      else if (m.type === "log") toast(m.msg);
+      if (m.type === "fatal") { toast("clip engine: " + m.msg); dbg("ENGINE ERROR: " + m.msg); }
+      else if (m.type === "log") { dbg("log: " + m.msg); }
       else if (m.type === "clip") finishClip(m.buffer, m.audio);
     };
     const vtrack = stream.getVideoTracks()[0].clone();
@@ -1029,6 +1031,7 @@ window.FishClip = (function () {
     const blob = buffer ? new Blob([buffer], { type: "video/mp4" }) : null;
     if (blob && window.commitBite) { commitBite(blob, pendingLanded).catch(() => {}); toast(hadAudio ? "🎥 saved · sound ✓" : "🎥 saved · no audio captured"); }
     else toast("clip not ready");
+    dbg("clip back: " + (blob ? Math.round(blob.size / 1024) + "kb" : "EMPTY") + (hadAudio ? " · sound✓" : " · NO audio"));
     busy = false;
   }
 
@@ -1056,7 +1059,8 @@ window.FishClip = (function () {
   function endBite(landed) {
     if (busy) return; busy = true; pendingLanded = landed; biteActive = false; setBtn();
     toast(landed ? "🎣 landed — saving clip…" : "✗ miss — saving clip…");
-    saveTimer = setTimeout(() => { if (busy) { busy = false; toast("clip timed out"); } }, 12000);
+    dbg("outcome " + (landed ? "landed" : "miss") + " → asking engine for clip…");
+    saveTimer = setTimeout(() => { if (busy) { busy = false; toast("clip timed out"); dbg("clip TIMED OUT (engine never replied)"); } }, 12000);
     if (hasWC && worker) worker.postMessage({ type: "save", pre: preSec() });
     else mrSave();
   }
@@ -1069,6 +1073,7 @@ window.FishClip = (function () {
     recog.onresult = ev => {
       for (let i = ev.resultIndex; i < ev.results.length; i++) {
         const txt = ev.results[i][0].transcript.toLowerCase();
+        dbg((biteActive ? "fish-on" : "listening") + " · heard: " + txt);
         if (!biteActive) { if (BITE.some(p => txt.includes(p))) { startBite(); return; } }
         else { if (MISSED.some(p => txt.includes(p))) { endBite(false); return; }
                if (LANDED.some(p => txt.includes(p))) { endBite(true); return; } }
