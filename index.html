@@ -377,7 +377,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.06.5";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.06.6";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -999,7 +999,8 @@ window.FishClip = (function () {
     worker.onmessage = e => {
       const m = e.data;
       if (m.type === "fatal") toast("clip engine: " + m.msg);
-      else if (m.type === "clip") finishClip(m.buffer);
+      else if (m.type === "log") toast(m.msg);
+      else if (m.type === "clip") finishClip(m.buffer, m.audio);
     };
     const vtrack = stream.getVideoTracks()[0].clone();
     worker.postMessage({ type: "start", track: vtrack, pre: preSec(), max: maxSec() }, [vtrack]);
@@ -1008,8 +1009,8 @@ window.FishClip = (function () {
   function startAudioCapture() {
     try {
       const at = stream.getAudioTracks()[0]; if (!at) return;
-      const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
-      audioCtx = new AC();
+      if (!audioCtx) { const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return; audioCtx = new AC(); }
+      audioCtx.resume().catch(() => {});
       const srcNode = audioCtx.createMediaStreamSource(new MediaStream([at]));
       const node = audioCtx.createScriptProcessor(4096, 1, 1);
       const sink = audioCtx.createGain(); sink.gain.value = 0;   // route to output silently to keep it running
@@ -1023,10 +1024,10 @@ window.FishClip = (function () {
       };
     } catch (e) {}
   }
-  function finishClip(buffer) {
+  function finishClip(buffer, hadAudio) {
     clearTimeout(saveTimer);
     const blob = buffer ? new Blob([buffer], { type: "video/mp4" }) : null;
-    if (blob && window.commitBite) commitBite(blob, pendingLanded).catch(() => {});
+    if (blob && window.commitBite) { commitBite(blob, pendingLanded).catch(() => {}); toast(hadAudio ? "🎥 saved · sound ✓" : "🎥 saved · no audio captured"); }
     else toast("clip not ready");
     busy = false;
   }
@@ -1078,6 +1079,7 @@ window.FishClip = (function () {
 
   async function start() {
     if (watching) return;
+    try { const AC = window.AudioContext || window.webkitAudioContext; if (AC) { audioCtx = new AC(); audioCtx.resume().catch(() => {}); } } catch (e) {}   // create+resume in the tap gesture (iOS starts it suspended)
     try {
       stream = await navigator.mediaDevices.getUserMedia({
         video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } },
