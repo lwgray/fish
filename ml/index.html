@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Cork Tracker Demo</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0f1115; --panel:#171a21; --text:#e8edf2; --muted:#9aa6b2; --accent:#58d0c5; --danger:#ff6b6b; }
+    * { box-sizing: border-box; }
+    body { margin:0; font-family:Inter,system-ui,sans-serif; background:var(--bg); color:var(--text); display:grid; grid-template-columns:320px 1fr; min-height:100vh; }
+    aside, main { padding:20px; }
+    aside { background:var(--panel); border-right:1px solid rgba(255,255,255,0.08); }
+    h1 { margin-top:0; font-size:1.4rem; }
+    .muted { color:var(--muted); line-height:1.5; }
+    .row { margin:14px 0; display:grid; gap:8px; }
+    button, input { font:inherit; padding:10px 12px; border-radius:10px; border:1px solid rgba(255,255,255,0.12); background:#0f141b; color:var(--text); }
+    button { cursor:pointer; background:var(--accent); color:#072b29; border:none; font-weight:700; }
+    video, canvas { width:min(100%, 1100px); aspect-ratio:16/9; background:#000; border-radius:14px; display:block; }
+    .stack { position:relative; width:min(100%, 1100px); }
+    canvas { position:absolute; inset:0; }
+    .pill { display:inline-block; padding:6px 10px; border-radius:999px; background:rgba(88,208,197,0.14); color:var(--accent); font-size:0.85rem; }
+    pre { white-space:pre-wrap; background:#0b0e13; padding:12px; border-radius:12px; color:#c8d3dd; border:1px solid rgba(255,255,255,0.08); }
+    @media (max-width:900px) { body { grid-template-columns:1fr; } aside { border-right:none; border-bottom:1px solid rgba(255,255,255,0.08); } }
+  </style>
+</head>
+<body>
+  <aside>
+    <h1>Cork Tracker</h1>
+    <p class="muted">Load your converted TensorFlow.js model, then use a local video file. The app detects the cork, smooths the box, and draws a zoom crop around it.</p>
+    <div class="row"><label>Model folder URL</label><input id="modelUrl" value="./tfjs_model/model.json" /></div>
+    <div class="row"><button id="loadModelBtn">Load model</button><span id="modelStatus" class="pill">Model not loaded</span></div>
+    <div class="row"><label>Video file</label><input id="videoFile" type="file" accept="video/*" /></div>
+    <div class="row"><label>Confidence threshold</label><input id="scoreThreshold" type="number" min="0" max="1" step="0.05" value="0.35" /></div>
+    <div class="row"><label>Zoom factor</label><input id="zoomFactor" type="number" min="1" max="8" step="0.25" value="3" /></div>
+    <div class="row"><label>Smoothing alpha</label><input id="alpha" type="number" min="0.01" max="1" step="0.01" value="0.2" /></div>
+    <pre id="log">Waiting.</pre>
+  </aside>
+  <main><div class="stack"><video id="video" controls playsinline></video><canvas id="overlay"></canvas></div></main>
+  <script type="module">
+    import * as tf from 'https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js';
+    const modelUrlEl = document.getElementById('modelUrl');
+    const loadModelBtn = document.getElementById('loadModelBtn');
+    const modelStatus = document.getElementById('modelStatus');
+    const videoFile = document.getElementById('videoFile');
+    const scoreThresholdEl = document.getElementById('scoreThreshold');
+    const zoomFactorEl = document.getElementById('zoomFactor');
+    const alphaEl = document.getElementById('alpha');
+    const logEl = document.getElementById('log');
+    const video = document.getElementById('video');
+    const canvas = document.getElementById('overlay');
+    const ctx = canvas.getContext('2d');
+    let model = null, running = false, track = null, lastDetectAt = 0;
+    const detectEveryMs = 120;
+    const log = (msg) => logEl.textContent = msg;
+    const setCanvasSize = () => { canvas.width = video.videoWidth || 1280; canvas.height = video.videoHeight || 720; };
+    function smoothBox(det, alpha) { if (!track) { track = { ...det }; return track; } track.cx = alpha * det.cx + (1 - alpha) * track.cx; track.cy = alpha * det.cy + (1 - alpha) * track.cy; track.w = alpha * det.w + (1 - alpha) * track.w; track.h = alpha * det.h + (1 - alpha) * track.h; track.score = det.score; return track; }
+    function zoomCrop(box, frameW, frameH, zoomFactor) { const cropW = Math.min(frameW, box.w * zoomFactor); const cropH = Math.min(frameH, box.h * zoomFactor); const x = Math.max(0, Math.min(frameW - cropW, box.cx - cropW / 2)); const y = Math.max(0, Math.min(frameH - cropH, box.cy - cropH / 2)); return { x, y, cropW, cropH }; }
+    function draw(box) { ctx.clearRect(0, 0, canvas.width, canvas.height); if (!box) return; const x = box.cx - box.w / 2; const y = box.cy - box.h / 2; ctx.strokeStyle = '#58d0c5'; ctx.lineWidth = 3; ctx.strokeRect(x, y, box.w, box.h); ctx.fillStyle = '#58d0c5'; ctx.font = '18px sans-serif'; ctx.fillText(`cork ${(box.score * 100).toFixed(1)}%`, x, Math.max(20, y - 8)); const z = zoomCrop(box, canvas.width, canvas.height, Number(zoomFactorEl.value)); ctx.strokeStyle = '#ff6b6b'; ctx.lineWidth = 2; ctx.strokeRect(z.x, z.y, z.cropW, z.cropH); }
+    async function detectLoop() {
+      if (!running || !model || video.paused || video.ended) { requestAnimationFrame(detectLoop); return; }
+      const now = performance.now();
+      if (now - lastDetectAt >= detectEveryMs) {
+        lastDetectAt = now;
+        const threshold = Number(scoreThresholdEl.value), alpha = Number(alphaEl.value);
+        const input = tf.tidy(() => tf.image.resizeBilinear(tf.browser.fromPixels(video), [320, 320]).expandDims(0).div(255.0));
+        try {
+          const output = model.predict(input);
+          const tensors = Array.isArray(output) ? output : [output];
+          const data = await Promise.all(tensors.map(t => t.array()));
+          let best = null;
+          const first = data[0];
+          if (Array.isArray(first) && Array.isArray(first[0])) {
+            const candidates = first[0];
+            for (const row of candidates) {
+              if (!Array.isArray(row) || row.length < 5) continue;
+              const [x, y, w, h, score] = row;
+              if (score < threshold) continue;
+              if (!best || score > best.score) best = { cx: x + w / 2, cy: y + h / 2, w, h, score };
+            }
+          }
+          if (best) {
+            const scaleX = canvas.width / 320, scaleY = canvas.height / 320;
+            best.cx *= scaleX; best.cy *= scaleY; best.w *= scaleX; best.h *= scaleY;
+            draw(smoothBox(best, alpha));
+            log(`Tracking cork: score=${best.score.toFixed(3)} center=(${best.cx.toFixed(1)}, ${best.cy.toFixed(1)}) size=(${best.w.toFixed(1)}, ${best.h.toFixed(1)})`);
+          } else { draw(track); log('No detection above threshold; keeping last track.'); }
+        } catch (err) { console.error(err); log(`Inference error: ${err.message}`); }
+        finally { input.dispose(); }
+      }
+      requestAnimationFrame(detectLoop);
+    }
+    loadModelBtn.addEventListener('click', async () => { modelStatus.textContent = 'Loading...'; log('Loading model...'); model = await tf.loadLayersModel(modelUrlEl.value); modelStatus.textContent = 'Model loaded'; log('Model loaded. Choose a video file and press play.'); if (!running) { running = true; requestAnimationFrame(detectLoop); } });
+    videoFile.addEventListener('change', () => { const file = videoFile.files?.[0]; if (!file) return; video.src = URL.createObjectURL(file); video.load(); track = null; log(`Loaded video: ${file.name}`); });
+    video.addEventListener('loadedmetadata', () => { setCanvasSize(); log(`Video ready: ${video.videoWidth}x${video.videoHeight}`); });
+  </script>
+</body>
+</html>
