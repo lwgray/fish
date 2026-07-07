@@ -18,3 +18,8 @@ node_modules/
 # Local data exports / backups
 *.csv
 panfish_backup_*.json
+
+.dev.vars*
+!.dev.vars.example
+.env*
+!.env.example
