@@ -279,9 +279,10 @@
 <script id="fcWorker" type="text/worker">
 import { Muxer, ArrayBufferTarget } from 'https://cdn.jsdelivr.net/npm/mp4-muxer@5/+esm';
 let vEnc=null, aEnc=null, vRing=[], aRing=[], vConfig=null, aConfig=null;
-let W=0, H=0, rot=0, frameN=0, aRate=48000, aCh=1;
+let W=0, H=0, frameN=0, aRate=48000;
 let PRE=15, MAX=120, biteActive=false, biteTs=0;
 const post=(o,t)=>self.postMessage(o,t||[]);
+const wall=()=>Math.round((performance.timeOrigin+performance.now())*1000);
 function trimRing(ring,nowTs){
   const retainS = biteActive ? (PRE+MAX) : (PRE+5);
   const cutoff = nowTs - retainS*1e6;
@@ -291,7 +292,9 @@ function trimRing(ring,nowTs){
 }
 async function runVideo(track){
   const s=(track.getSettings&&track.getSettings())||{};
-  W=s.width||1280; H=s.height||720;
+  let sw=s.width||1280, sh=s.height||720;
+  const rotate = sw>sh;
+  W = rotate ? sh : sw;  H = rotate ? sw : sh;
   const cfg={codec:'avc1.42E01F',width:W,height:H,bitrate:2500000,framerate:30,latencyMode:'realtime',avc:{format:'avc'}};
   let sup=false; try{ sup=(await VideoEncoder.isConfigSupported(cfg)).supported; }catch(err){}
   if(!sup){ post({type:'fatal',msg:'H.264 encode unsupported'}); return; }
@@ -302,30 +305,33 @@ async function runVideo(track){
     error:(err)=>post({type:'log',msg:'venc '+err})
   });
   vEnc.configure(cfg);
+  const canvas=new OffscreenCanvas(W,H), ctx=canvas.getContext('2d',{alpha:false});
   const proc=new MediaStreamTrackProcessor({track}); const reader=proc.readable.getReader();
   post({type:'started'});
   while(true){ const {done,value}=await reader.read(); if(done)break;
-    if(frameN===0 && typeof value.rotation==='number') rot=value.rotation;
-    try{ vEnc.encode(value,{keyFrame:(frameN%30===0)}); }catch(err){}
+    try{
+      ctx.save();
+      if(rotate){ ctx.translate(W,0); ctx.rotate(Math.PI/2); }
+      ctx.drawImage(value,0,0);
+      ctx.restore();
+      const vf=new VideoFrame(canvas,{timestamp:wall()});
+      vEnc.encode(vf,{keyFrame:(frameN%30===0)});
+      vf.close();
+    }catch(err){}
     value.close(); frameN++; }
 }
-async function runAudio(track){
+function ensureAudioEnc(rate){
+  if(aEnc) return;
   try{
-    if(typeof AudioEncoder==='undefined') return;
     aEnc=new AudioEncoder({
       output:(chunk,meta)=>{ if(meta&&meta.decoderConfig) aConfig=meta.decoderConfig;
-        const data=new ArrayBuffer(chunk.byteLength); chunk.copyTo(data);
-        aRing.push({data,key:true,timestamp:chunk.timestamp,duration:chunk.duration||0}); trimRing(aRing,chunk.timestamp); },
-      error:(err)=>post({type:'log',msg:'aenc '+err})
+        const d=new ArrayBuffer(chunk.byteLength); chunk.copyTo(d);
+        aRing.push({data:d,key:true,timestamp:chunk.timestamp,duration:chunk.duration||0}); trimRing(aRing,chunk.timestamp); },
+      error:(e)=>post({type:'log',msg:'aenc '+e})
     });
-    const proc=new MediaStreamTrackProcessor({track}); const reader=proc.readable.getReader();
-    let cfgd=false;
-    while(true){ const {done,value}=await reader.read(); if(done)break;
-      if(!cfgd){ aRate=value.sampleRate||48000; aCh=value.numberOfChannels||1;
-        try{ aEnc.configure({codec:'mp4a.40.2',sampleRate:aRate,numberOfChannels:aCh,bitrate:128000}); cfgd=true; }catch(e){ value.close(); return; } }
-      try{ aEnc.encode(value); }catch(e){}
-      value.close(); }
-  }catch(e){ post({type:'log',msg:'audio '+e}); }
+    aRate=rate||48000;
+    aEnc.configure({codec:'mp4a.40.2',sampleRate:aRate,numberOfChannels:1,bitrate:128000});
+  }catch(e){ aEnc=null; }
 }
 self.onmessage=async(e)=>{
   const m=e.data;
@@ -334,9 +340,13 @@ self.onmessage=async(e)=>{
       PRE=m.pre||15; MAX=m.max||120;
       if(typeof MediaStreamTrackProcessor==='undefined'){ post({type:'fatal',msg:'no frame processor'}); return; }
       runVideo(m.track);
-      if(m.audioTrack) runAudio(m.audioTrack);
     }
-    else if(m.type==='bite'){ PRE=m.pre||PRE; biteActive=true; biteTs=vRing.length?vRing[vRing.length-1].timestamp:0; }
+    else if(m.type==='audio'){
+      if(typeof AudioEncoder==='undefined') return;
+      ensureAudioEnc(m.rate);
+      if(aEnc){ try{ const ad=new AudioData({format:'f32-planar',sampleRate:m.rate,numberOfFrames:m.pcm.length,numberOfChannels:1,timestamp:m.ts,data:m.pcm}); aEnc.encode(ad); ad.close(); }catch(e){} }
+    }
+    else if(m.type==='bite'){ PRE=m.pre||PRE; biteActive=true; biteTs=vRing.length?vRing[vRing.length-1].timestamp:wall(); }
     else if(m.type==='save'){
       biteActive=false;
       if(!vConfig||!vRing.length){ post({type:'clip',buffer:null}); return; }
@@ -346,15 +356,15 @@ self.onmessage=async(e)=>{
       if(!vRing[vs].key){ for(let i=0;i<vRing.length;i++){ if(vRing[i].key){ vs=i; break; } } }
       const vsel=vRing.slice(vs), clipStart=vsel[0].timestamp;
       const haveAudio=!!(aConfig && aRing.length);
-      const opts={target:new ArrayBufferTarget(),video:{codec:'avc',width:W,height:H,rotation:rot||0},fastStart:'in-memory',firstTimestampBehavior:'offset'};
-      if(haveAudio) opts.audio={codec:'aac',numberOfChannels:aCh,sampleRate:aRate};
+      const opts={target:new ArrayBufferTarget(),video:{codec:'avc',width:W,height:H},fastStart:'in-memory',firstTimestampBehavior:'offset'};
+      if(haveAudio) opts.audio={codec:'aac',numberOfChannels:1,sampleRate:aRate};
       const muxer=new Muxer(opts);
       for(const it of vsel){ muxer.addVideoChunk(new EncodedVideoChunk({type:it.key?'key':'delta',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:vConfig}); }
       if(haveAudio){ for(const it of aRing){ if(it.timestamp<clipStart-2e5 || it.timestamp>nowTs+2e5) continue;
         muxer.addAudioChunk(new EncodedAudioChunk({type:'key',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:aConfig}); } }
       muxer.finalize();
       const buf=muxer.target.buffer;
-      post({type:'clip',buffer:buf,bytes:buf.byteLength,audio:haveAudio,rot},[buf]);
+      post({type:'clip',buffer:buf,bytes:buf.byteLength,audio:haveAudio},[buf]);
     }
   }catch(err){ post({type:'fatal',msg:String(err)}); }
 };
@@ -367,7 +377,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.06.4";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.06.5";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -977,6 +987,7 @@ window.FishClip = (function () {
   const hasWC = (typeof window.VideoEncoder !== "undefined");   // WebCodecs pre-roll path
   let stream = null, recog = null, wake = null;
   let worker = null;                       // WebCodecs backend (ring buffer lives in a worker)
+  let audioCtx = null;                      // Web Audio capture (iOS frame processor is video-only)
   let rec = null, recChunks = [];          // MediaRecorder fallback (record from trigger)
   let watching = false, biteActive = false, busy = false, pendingLanded = false, saveTimer = null;
 
@@ -991,10 +1002,26 @@ window.FishClip = (function () {
       else if (m.type === "clip") finishClip(m.buffer);
     };
     const vtrack = stream.getVideoTracks()[0].clone();
-    const atracks = stream.getAudioTracks();
-    const atrack = atracks.length ? atracks[0].clone() : null;
-    const transfer = atrack ? [vtrack, atrack] : [vtrack];
-    worker.postMessage({ type: "start", track: vtrack, audioTrack: atrack, pre: preSec(), max: maxSec() }, transfer);
+    worker.postMessage({ type: "start", track: vtrack, pre: preSec(), max: maxSec() }, [vtrack]);
+    startAudioCapture();
+  }
+  function startAudioCapture() {
+    try {
+      const at = stream.getAudioTracks()[0]; if (!at) return;
+      const AC = window.AudioContext || window.webkitAudioContext; if (!AC) return;
+      audioCtx = new AC();
+      const srcNode = audioCtx.createMediaStreamSource(new MediaStream([at]));
+      const node = audioCtx.createScriptProcessor(4096, 1, 1);
+      const sink = audioCtx.createGain(); sink.gain.value = 0;   // route to output silently to keep it running
+      srcNode.connect(node); node.connect(sink); sink.connect(audioCtx.destination);
+      node.onaudioprocess = ev => {
+        if (!worker) return;
+        const pcm = new Float32Array(ev.inputBuffer.getChannelData(0));
+        const durMs = (ev.inputBuffer.length / audioCtx.sampleRate) * 1000;
+        const ts = Math.round((performance.timeOrigin + performance.now() - durMs) * 1000);   // buffer START, shared clock
+        worker.postMessage({ type: "audio", pcm, rate: audioCtx.sampleRate, ts }, [pcm.buffer]);
+      };
+    } catch (e) {}
   }
   function finishClip(buffer) {
     clearTimeout(saveTimer);
@@ -1071,6 +1098,7 @@ window.FishClip = (function () {
     try { rec && rec.state !== "inactive" && rec.stop(); } catch (e) {}
     try { recog && recog.stop(); } catch (e) {}
     if (worker) { try { worker.terminate(); } catch (e) {} worker = null; }
+    if (audioCtx) { try { audioCtx.close(); } catch (e) {} audioCtx = null; }
     if (stream) stream.getTracks().forEach(t => t.stop());
     if (wake) { try { wake.release(); } catch (e) {} wake = null; }
     const pv = document.getElementById("camPreview");
