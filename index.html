@@ -281,7 +281,7 @@
 <script id="fcWorker" type="text/worker">
 import { Muxer, ArrayBufferTarget } from 'https://cdn.jsdelivr.net/npm/mp4-muxer@5/+esm';
 let vEnc=null, aEnc=null, vRing=[], aRing=[], vConfig=null, aConfig=null;
-let W=0, H=0, frameN=0, aRate=48000;
+let W=0, H=0, frameN=0, aRate=48000, aStart=0, aSamples=0;
 let PRE=15, MAX=120, biteActive=false, biteTs=0;
 const post=(o,t)=>self.postMessage(o,t||[]);
 const wall=()=>Math.round((performance.timeOrigin+performance.now())*1000);
@@ -346,7 +346,12 @@ self.onmessage=async(e)=>{
     else if(m.type==='audio'){
       if(typeof AudioEncoder==='undefined') return;
       ensureAudioEnc(m.rate);
-      if(aEnc){ try{ const ad=new AudioData({format:'f32-planar',sampleRate:m.rate,numberOfFrames:m.pcm.length,numberOfChannels:1,timestamp:m.ts,data:m.pcm}); aEnc.encode(ad); ad.close(); }catch(e){} }
+      if(aEnc){ try{
+        if(!aStart) aStart=wall();
+        const ts=aStart+Math.round(aSamples/m.rate*1e6); aSamples+=m.pcm.length;   // audio on the worker clock, same base as video
+        const ad=new AudioData({format:'f32-planar',sampleRate:m.rate,numberOfFrames:m.pcm.length,numberOfChannels:1,timestamp:ts,data:m.pcm});
+        aEnc.encode(ad); ad.close();
+      }catch(e){} }
     }
     else if(m.type==='bite'){ PRE=m.pre||PRE; biteActive=true; biteTs=vRing.length?vRing[vRing.length-1].timestamp:wall(); }
     else if(m.type==='save'){
@@ -362,11 +367,12 @@ self.onmessage=async(e)=>{
       if(haveAudio) opts.audio={codec:'aac',numberOfChannels:1,sampleRate:aRate};
       const muxer=new Muxer(opts);
       for(const it of vsel){ muxer.addVideoChunk(new EncodedVideoChunk({type:it.key?'key':'delta',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:vConfig}); }
+      let aAdded=0;
       if(haveAudio){ for(const it of aRing){ if(it.timestamp<clipStart-2e5 || it.timestamp>nowTs+2e5) continue;
-        muxer.addAudioChunk(new EncodedAudioChunk({type:'key',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:aConfig}); } }
+        muxer.addAudioChunk(new EncodedAudioChunk({type:'key',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:aConfig}); aAdded++; } }
       muxer.finalize();
       const buf=muxer.target.buffer;
-      post({type:'clip',buffer:buf,bytes:buf.byteLength,audio:haveAudio},[buf]);
+      post({type:'clip',buffer:buf,bytes:buf.byteLength,audio:haveAudio,aAdded,aRing:aRing.length},[buf]);
     }
   }catch(err){ post({type:'fatal',msg:String(err)}); }
 };
@@ -379,7 +385,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.08.1";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.08.2";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -991,6 +997,7 @@ window.FishClip = (function () {
   let stream = null, recog = null, wake = null;
   let worker = null;                       // WebCodecs backend (ring buffer lives in a worker)
   let audioCtx = null;                      // Web Audio capture (iOS frame processor is video-only)
+  let micPeak = 0;                          // loudest sample seen since last clip (0 = mic delivering silence)
   let rec = null, recChunks = [];          // MediaRecorder fallback (record from trigger)
   let watching = false, biteActive = false, busy = false, pendingLanded = false, saveTimer = null;
 
@@ -1003,7 +1010,7 @@ window.FishClip = (function () {
       const m = e.data;
       if (m.type === "fatal") { toast("clip engine: " + m.msg); dbg("ENGINE ERROR: " + m.msg); }
       else if (m.type === "log") { dbg("log: " + m.msg); }
-      else if (m.type === "clip") finishClip(m.buffer, m.audio);
+      else if (m.type === "clip") finishClip(m);
     };
     const vtrack = stream.getVideoTracks()[0].clone();
     worker.postMessage({ type: "start", track: vtrack, pre: preSec(), max: maxSec() }, [vtrack]);
@@ -1021,18 +1028,19 @@ window.FishClip = (function () {
       node.onaudioprocess = ev => {
         if (!worker) return;
         const pcm = new Float32Array(ev.inputBuffer.getChannelData(0));
-        const durMs = (ev.inputBuffer.length / audioCtx.sampleRate) * 1000;
-        const ts = Math.round((performance.timeOrigin + performance.now() - durMs) * 1000);   // buffer START, shared clock
-        worker.postMessage({ type: "audio", pcm, rate: audioCtx.sampleRate, ts }, [pcm.buffer]);
+        let p = 0; for (let i = 0; i < pcm.length; i++) { const a = Math.abs(pcm[i]); if (a > p) p = a; }
+        if (p > micPeak) micPeak = p;
+        worker.postMessage({ type: "audio", pcm, rate: audioCtx.sampleRate }, [pcm.buffer]);
       };
     } catch (e) {}
   }
-  function finishClip(buffer, hadAudio) {
+  function finishClip(m) {
     clearTimeout(saveTimer);
-    const blob = buffer ? new Blob([buffer], { type: "video/mp4" }) : null;
-    if (blob && window.commitBite) { commitBite(blob, pendingLanded).catch(() => {}); toast(hadAudio ? "🎥 saved · sound ✓" : "🎥 saved · no audio captured"); }
+    const blob = m.buffer ? new Blob([m.buffer], { type: "video/mp4" }) : null;
+    if (blob && window.commitBite) { commitBite(blob, pendingLanded).catch(() => {}); toast(m.audio ? "🎥 saved · sound ✓" : "🎥 saved · no audio"); }
     else toast("clip not ready");
-    dbg("clip back: " + (blob ? Math.round(blob.size / 1024) + "kb" : "EMPTY") + (hadAudio ? " · sound✓" : " · NO audio"));
+    dbg("clip " + (blob ? Math.round(blob.size / 1024) + "kb" : "EMPTY") + " · audMuxed " + (m.aAdded || 0) + "/" + (m.aRing || 0) + " · micPeak " + micPeak.toFixed(3));
+    micPeak = 0;
     busy = false;
   }
 
