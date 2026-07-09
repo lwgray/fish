@@ -285,6 +285,14 @@ let W=0, H=0, frameN=0, aRate=48000, aStart=0, aSamples=0;
 let PRE=15, MAX=120, biteActive=false, biteTs=0;
 const post=(o,t)=>self.postMessage(o,t||[]);
 const wall=()=>Math.round((performance.timeOrigin+performance.now())*1000);
+function ascFor(rate,ch){ // build an AAC-LC AudioSpecificConfig if the encoder didn't give us one
+  const tbl=[96000,88200,64000,48000,44100,32000,24000,22050,16000,12000,11025,8000,7350];
+  let fi=tbl.indexOf(rate); if(fi<0) fi=3;
+  const ot=2; // AAC LC
+  const b0=(ot<<3)|(fi>>1);
+  const b1=((fi&1)<<7)|((ch&15)<<3);
+  return new Uint8Array([b0,b1]);
+}
 function trimRing(ring,nowTs){
   const retainS = biteActive ? (PRE+MAX) : (PRE+5);
   const cutoff = nowTs - retainS*1e6;
@@ -363,16 +371,24 @@ self.onmessage=async(e)=>{
       if(!vRing[vs].key){ for(let i=0;i<vRing.length;i++){ if(vRing[i].key){ vs=i; break; } } }
       const vsel=vRing.slice(vs), clipStart=vsel[0].timestamp;
       const haveAudio=!!(aConfig && aRing.length);
+      let audioDC=null, adescLen=-1;
+      if(haveAudio){
+        let adesc=null;
+        if(aConfig.description){ const d=aConfig.description; adesc = d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer,d.byteOffset,d.byteLength); }
+        if(!adesc || !adesc.byteLength){ adesc=ascFor(aRate,1); adescLen=-adesc.byteLength; }   // negative = we synthesized it
+        else { adescLen=adesc.byteLength; }
+        audioDC={codec:aConfig.codec||'mp4a.40.2',sampleRate:aRate,numberOfChannels:1,description:adesc};
+      }
       const opts={target:new ArrayBufferTarget(),video:{codec:'avc',width:W,height:H},fastStart:'in-memory',firstTimestampBehavior:'offset'};
       if(haveAudio) opts.audio={codec:'aac',numberOfChannels:1,sampleRate:aRate};
       const muxer=new Muxer(opts);
       for(const it of vsel){ muxer.addVideoChunk(new EncodedVideoChunk({type:it.key?'key':'delta',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:vConfig}); }
       let aAdded=0;
       if(haveAudio){ for(const it of aRing){ if(it.timestamp<clipStart-2e5 || it.timestamp>nowTs+2e5) continue;
-        muxer.addAudioChunk(new EncodedAudioChunk({type:'key',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:aConfig}); aAdded++; } }
+        muxer.addAudioChunk(new EncodedAudioChunk({type:'key',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:audioDC}); aAdded++; } }
       muxer.finalize();
       const buf=muxer.target.buffer;
-      post({type:'clip',buffer:buf,bytes:buf.byteLength,audio:haveAudio,aAdded,aRing:aRing.length},[buf]);
+      post({type:'clip',buffer:buf,bytes:buf.byteLength,audio:haveAudio,aAdded,aRing:aRing.length,adescLen},[buf]);
     }
   }catch(err){ post({type:'fatal',msg:String(err)}); }
 };
@@ -385,7 +401,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.08.2";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.08.3";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -1039,7 +1055,7 @@ window.FishClip = (function () {
     const blob = m.buffer ? new Blob([m.buffer], { type: "video/mp4" }) : null;
     if (blob && window.commitBite) { commitBite(blob, pendingLanded).catch(() => {}); toast(m.audio ? "🎥 saved · sound ✓" : "🎥 saved · no audio"); }
     else toast("clip not ready");
-    dbg("clip " + (blob ? Math.round(blob.size / 1024) + "kb" : "EMPTY") + " · audMuxed " + (m.aAdded || 0) + "/" + (m.aRing || 0) + " · micPeak " + micPeak.toFixed(3));
+    dbg("clip " + (blob ? Math.round(blob.size / 1024) + "kb" : "EMPTY") + " · audMuxed " + (m.aAdded || 0) + "/" + (m.aRing || 0) + " · micPeak " + micPeak.toFixed(3) + " · desc " + (m.adescLen == null ? "?" : m.adescLen));
     micPeak = 0;
     busy = false;
   }
