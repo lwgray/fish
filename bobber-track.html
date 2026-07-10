@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#eef3f4">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<title>Bobber Track — auto-zoom test</title>
+<style>
+  /* Light theme lifted from the real app (index.html :root) so this reads like Panfish Log and stays readable outdoors */
+  :root{
+    --bg:#eef3f4; --panel:#ffffff; --panel2:#f2f7f8; --line:#d4e0e4;
+    --accent:#0b7c8c; --accent2:#0a8f4d; --warn:#b56309; --danger:#c62f43;
+    --text:#0c2530; --muted:#5b7079; --ph:#e2edf0;
+    --shadow:0 1px 2px rgba(12,37,48,.05), 0 6px 18px rgba(12,37,48,.07);
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;height:100%}
+  body{background:var(--bg);color:var(--text);font:16px/1.45 -apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif;-webkit-text-size-adjust:100%}
+  .wrap{max-width:560px;margin:0 auto;padding:calc(14px + env(safe-area-inset-top)) 14px calc(24px + env(safe-area-inset-bottom))}
+  h1{font-size:20px;margin:2px 2px 4px;letter-spacing:.2px;font-weight:800}
+  h2{font-size:13px;color:var(--muted);text-transform:uppercase;letter-spacing:.8px;font-weight:800;margin:16px 2px 8px}
+  p.lede{color:var(--muted);font-size:14px;margin:4px 2px 12px;line-height:1.5}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:14px;margin-bottom:12px;box-shadow:var(--shadow)}
+  .btn{display:flex;align-items:center;justify-content:center;gap:8px;width:100%;padding:16px;font-size:17px;
+    font-weight:800;border:none;border-radius:14px;background:var(--accent);color:#fff;cursor:pointer;box-shadow:var(--shadow)}
+  .btn:active{transform:translateY(1px)}
+  .btn.green{background:var(--accent2)} .btn.warn{background:var(--warn);color:#fff}
+  .btn.ghost{background:#fff;color:var(--text);border:1.5px solid var(--line);box-shadow:none}
+  .btn.sm{padding:11px;font-size:14px;border-radius:12px;box-shadow:none}
+  .btn:disabled{opacity:.4}
+  .row{display:flex;gap:10px}.row>*{flex:1}
+  .pill{font-size:12px;padding:5px 10px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);color:var(--muted);font-weight:600}
+  .pill.ok{color:#fff;background:var(--accent2);border-color:var(--accent2)}
+  .pill.warn{color:#fff;background:var(--warn);border-color:var(--warn)}
+  .pill.err{color:#fff;background:var(--danger);border-color:var(--danger)}
+  label{display:block;font-size:12px;color:var(--muted);margin:12px 0 5px;font-weight:700;text-transform:uppercase;letter-spacing:.6px}
+  label .v{color:var(--text);float:right;font-variant-numeric:tabular-nums;text-transform:none;letter-spacing:0}
+  input[type=range]{width:100%;accent-color:var(--accent)}
+  .chips{display:flex;flex-wrap:wrap;gap:6px;margin:4px 0}
+  .chip{padding:8px 12px;border-radius:999px;background:var(--panel2);border:1.5px solid var(--line);color:var(--text);font-size:13px;cursor:pointer;font-weight:600}
+  .chip.on{border-color:var(--accent2);color:var(--accent2)}
+  .chip .sw{display:inline-block;width:11px;height:11px;border-radius:50%;vertical-align:middle;margin-right:6px;border:1px solid rgba(0,0,0,.18)}
+  /* Stage: the "recorded" (cropped+zoomed) output on top, the wide scout view below */
+  .stage{position:relative;width:100%;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#000;margin:2px 0 10px}
+  .stage canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .badge{position:absolute;left:8px;top:8px;z-index:3;font-size:11px;font-weight:700;background:rgba(4,34,42,.72);
+    color:#fff;border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:4px 9px;-webkit-backdrop-filter:blur(3px);backdrop-filter:blur(3px)}
+  .wideWrap{position:relative;width:100%;aspect-ratio:16/9;border-radius:14px;overflow:hidden;background:#000;cursor:crosshair}
+  .wideWrap canvas{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .taphint{position:absolute;left:50%;bottom:8px;transform:translateX(-50%);z-index:3;font-size:12px;
+    background:rgba(4,34,42,.72);border:1px solid rgba(255,255,255,.25);border-radius:999px;padding:5px 12px;color:#dfeef2;white-space:nowrap}
+  .hud{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:8px 0 2px}
+  .stat{background:var(--panel2);border:1px solid var(--line);border-radius:12px;padding:9px 6px;text-align:center}
+  .stat b{display:block;font-size:19px;font-variant-numeric:tabular-nums;font-weight:800;color:var(--accent)} .stat span{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}
+  .conf{height:8px;border-radius:999px;background:var(--panel2);border:1px solid var(--line);overflow:hidden;margin:6px 0 2px}
+  .conf i{display:block;height:100%;width:0;background:var(--danger);transition:width .08s linear,background .2s}
+  video{display:none}
+  .note{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
+  code{background:var(--ph);border:1px solid var(--line);border-radius:6px;padding:1px 5px;font:12px ui-monospace,Menlo,monospace}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>🎯 Bobber Track — auto-zoom test</h1>
+  <p class="lede">Proving the tracker before it touches <code>index.html</code>. Tap <b>Start</b>, point at your bobber,
+  then <b>tap the bobber</b> in the wide view to lock its color. The top frame is the digital-zoom crop the clip engine
+  would record; the bottom is the scout view with the detection box (green) and crop window (cyan).</p>
+
+  <div class="card">
+    <div class="row">
+      <button id="startBtn" class="btn green">▶ Start camera</button>
+      <button id="stopBtn" class="btn ghost" disabled>■ Stop</button>
+    </div>
+
+    <div class="stage">
+      <span class="badge">🎥 recorded output (zoomed)</span>
+      <canvas id="outCanvas"></canvas>
+    </div>
+
+    <div class="wideWrap" id="wideWrap">
+      <canvas id="wideCanvas"></canvas>
+      <span class="taphint" id="tapHint">tap the bobber to lock its colour</span>
+    </div>
+
+    <div class="hud">
+      <div class="stat"><b id="sZoom">1.0×</b><span>zoom</span></div>
+      <div class="stat"><b id="sConf">—</b><span>confidence</span></div>
+      <div class="stat"><b id="sBlob">0</b><span>blob px</span></div>
+      <div class="stat"><b id="sFps">0</b><span>fps</span></div>
+    </div>
+    <div class="conf"><i id="confBar"></i></div>
+
+    <h2 style="margin-top:14px">Bobber colour</h2>
+    <div class="chips" id="preset">
+      <span class="chip" data-h="8"><span class="sw" style="background:#e23b2e"></span>Red</span>
+      <span class="chip" data-h="24"><span class="sw" style="background:#f47b1a"></span>Orange</span>
+      <span class="chip" data-h="55"><span class="sw" style="background:#e8d21a"></span>Yellow</span>
+      <span class="chip" data-h="90"><span class="sw" style="background:#8ed11a"></span>Chartreuse</span>
+      <span class="chip" data-h="330"><span class="sw" style="background:#e23a8e"></span>Pink</span>
+    </div>
+    <div class="note">Presets are a starting point — <b>tap-to-lock</b> samples your actual bobber under your actual light and works far better.</div>
+
+    <h2>Tuning</h2>
+    <label>Hue tolerance <span class="v" id="vHue">18°</span></label>
+    <input type="range" id="rHue" min="4" max="60" value="18">
+    <label>Min blob size <span class="v" id="vMin">30 px</span></label>
+    <input type="range" id="rMin" min="6" max="200" value="30">
+    <label>Max zoom <span class="v" id="vZoom">3.0×</span></label>
+    <input type="range" id="rZoom" min="10" max="60" value="30">
+    <label>Framing padding <span class="v" id="vPad">3.2×</span></label>
+    <input type="range" id="rPad" min="15" max="60" value="32">
+    <label>Smoothing <span class="v" id="vSmooth">0.15</span></label>
+    <input type="range" id="rSmooth" min="4" max="60" value="15">
+    <label>Confidence gate <span class="v" id="vGate">0.35</span></label>
+    <input type="range" id="rGate" min="5" max="90" value="35">
+
+    <div class="row" style="margin-top:14px">
+      <button id="showMask" class="btn ghost sm">👁 Show match mask</button>
+      <button id="resetBtn" class="btn ghost sm">↺ Reset</button>
+    </div>
+    <div class="note" id="status">Ready. Needs a secure context (https) and camera permission.</div>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-top:0">How this maps to the app</h2>
+    <p class="note" style="font-size:13px;line-height:1.5">
+      In <code>index.html</code> the <code>fcWorker</code> loop draws every camera frame with
+      <code>ctx.drawImage(value,0,0)</code> before encoding it into the pre-roll ring.
+      The auto-zoom is the 9-argument form of that same call — <code>ctx.drawImage(value, sx,sy,sw,sh, 0,0,W,H)</code> —
+      where <code>sx,sy,sw,sh</code> is the smoothed crop window this page computes. Detection runs on a downscaled copy
+      (~160&nbsp;px wide) so it costs ~1&nbsp;ms/frame. When confidence drops below the gate the crop eases back to the
+      full wide frame, so a lost track never ruins the shot.
+    </p>
+  </div>
+</div>
+
+<video id="cam" autoplay playsinline muted></video>
+
+<script>
+const $ = id => document.getElementById(id);
+const cam = $("cam");
+const wideCanvas = $("wideCanvas"), wctx = wideCanvas.getContext("2d");
+const outCanvas  = $("outCanvas"),  octx = outCanvas.getContext("2d", { alpha:false });
+// Small offscreen buffer for pixel analysis — tracking never needs full resolution.
+const AW = 160; let AH = 90;
+const aCanvas = document.createElement("canvas"); aCanvas.width = AW; aCanvas.height = AH;
+const actx = aCanvas.getContext("2d", { willReadFrequently:true });
+
+let stream = null, running = false, rafPending = false;
+let showMask = false;
+
+// Tunables (mirrored from the sliders)
+const P = { hueTol:18, minBlob:30, maxZoom:3.0, pad:3.2, smooth:0.15, gate:0.35 };
+// Locked target colour in HSV. hue in [0,360), sat/val in [0,1]. null = not set yet.
+let target = null;
+
+// Smoothed crop window in FRAME pixels {x,y,w,h}; starts as the full frame.
+let crop = null;
+let lastConf = 0, fps = 0, fpsT = 0, fpsN = 0, fpsClock = 0;
+
+function setStatus(m, cls){ const s=$("status"); s.textContent=m; s.style.color = cls==="err" ? "var(--danger)" : cls==="ok" ? "var(--accent2)" : "var(--muted)"; }
+
+/* ---- RGB→HSV (h:0..360, s/v:0..1) ---- */
+function rgb2hsv(r,g,b){
+  r/=255; g/=255; b/=255;
+  const mx=Math.max(r,g,b), mn=Math.min(r,g,b), d=mx-mn;
+  let h=0;
+  if(d){ if(mx===r) h=((g-b)/d)%6; else if(mx===g) h=(b-r)/d+2; else h=(r-g)/d+4; h*=60; if(h<0)h+=360; }
+  return [h, mx?d/mx:0, mx];
+}
+// Circular hue distance in degrees (handles the red wrap at 0/360).
+function hueDist(a,b){ let d=Math.abs(a-b)%360; return d>180?360-d:d; }
+
+/* ---- Per-frame detection on the downscaled buffer ----
+   Returns crop target in frame coords + a confidence score, or null. */
+function detect(fw, fh){
+  actx.drawImage(cam, 0, 0, AW, AH);
+  const img = actx.getImageData(0,0,AW,AH), d = img.data;
+  const satMin = target ? Math.max(0.25, target.s*0.45) : 0.35;
+  const valMin = target ? Math.max(0.20, target.v*0.35) : 0.30;
+
+  // Pass 1: collect every pixel whose hue matches the locked bobber colour.
+  let sx=0, sy=0, n=0, minX=AW, minY=AH, maxX=0, maxY=0;
+  const xs=[], ys=[];
+  for(let y=0;y<AH;y++){
+    for(let x=0;x<AW;x++){
+      const i=(y*AW+x)*4;
+      const [h,s,v]=rgb2hsv(d[i],d[i+1],d[i+2]);
+      const match = target && s>=satMin && v>=valMin && hueDist(h,target.h)<=P.hueTol;
+      if(showMask){ if(!match){ d[i]=d[i+1]=d[i+2]=0; } else { d[i]=39;d[i+1]=209;d[i+2]=143; } }
+      if(match){ xs.push(x); ys.push(y); sx+=x; sy+=y; n++; }
+    }
+  }
+  if(showMask) actx.putImageData(img,0,0);
+  if(n < 4) return { conf:0, n };
+
+  // Pass 2: reject stray matches far from the centroid so glints/other reds don't drag the box.
+  let cx=sx/n, cy=sy/n, r2=(AW*0.28)*(AW*0.28), sx2=0, sy2=0, n2=0;
+  for(let k=0;k<xs.length;k++){
+    const dx=xs[k]-cx, dy=ys[k]-cy;
+    if(dx*dx+dy*dy<=r2){ sx2+=xs[k]; sy2+=ys[k]; n2++;
+      if(xs[k]<minX)minX=xs[k]; if(xs[k]>maxX)maxX=xs[k];
+      if(ys[k]<minY)minY=ys[k]; if(ys[k]>maxY)maxY=ys[k]; }
+  }
+  if(n2<4) return { conf:0, n:n2 };
+  cx=sx2/n2; cy=sy2/n2;
+  const bw=Math.max(1,maxX-minX+1), bh=Math.max(1,maxY-minY+1);
+
+  // Confidence blends absolute size (vs. min-blob) with solidity (fill ratio of the box).
+  const solidity = n2/(bw*bh);
+  const sizeConf = Math.min(1, n2/Math.max(6,P.minBlob));
+  const conf = Math.max(0, Math.min(1, sizeConf * Math.min(1, solidity/0.20)));
+
+  // Scale analysis coords → frame coords; pad the box to frame the bobber.
+  const scaleX=fw/AW, scaleY=fh/AH;
+  const bobW=bw*scaleX, bobH=bh*scaleY;
+  let cw=Math.max(bobW,bobH)*P.pad;                     // square-ish crop sized off the bobber
+  cw=Math.max(fw/P.maxZoom, Math.min(fw, cw));          // clamp to max zoom … and never exceed frame
+  let ch=cw*(fh/fw);
+  if(ch>fh){ ch=fh; cw=ch*(fw/fh); }
+  let x=cx*scaleX-cw/2, y=cy*scaleY-ch/2;
+  x=Math.max(0,Math.min(fw-cw,x)); y=Math.max(0,Math.min(fh-ch,y));
+  return { conf, n:n2, x, y, w:cw, h:ch, bx:minX*scaleX, by:minY*scaleY, bw:bw*scaleX, bh:bh*scaleY };
+}
+
+function frame(){
+  rafPending = false;
+  if(!running) return;
+  const fw = cam.videoWidth, fh = cam.videoHeight;
+  if(fw && fh){
+    if(wideCanvas.width!==fw){ wideCanvas.width=fw; wideCanvas.height=fh; AH=Math.round(AW*fh/fw); aCanvas.height=AH;
+      outCanvas.width=fw; outCanvas.height=fh; crop={x:0,y:0,w:fw,h:fh}; }
+
+    const det = detect(fw, fh);
+    lastConf = det.conf || 0;
+
+    // Confidence gate: below threshold, ease the crop back out to the full frame.
+    let tgt;
+    if(det.conf >= P.gate && det.w){ tgt={x:det.x,y:det.y,w:det.w,h:det.h}; }
+    else { tgt={x:0,y:0,w:fw,h:fh}; }
+    // EMA smoothing so the frame glides instead of snapping (and doesn't pump on jitter).
+    const k = P.smooth;
+    crop.x += (tgt.x-crop.x)*k; crop.y += (tgt.y-crop.y)*k;
+    crop.w += (tgt.w-crop.w)*k; crop.h += (tgt.h-crop.h)*k;
+
+    // ---- Wide scout view: full frame + overlays ----
+    wctx.drawImage(cam,0,0,fw,fh);
+    if(det.w){ // detected bobber box (green)
+      wctx.lineWidth=Math.max(2,fw/240); wctx.strokeStyle="#27d18f";
+      wctx.strokeRect(det.bx,det.by,det.bw,det.bh);
+    }
+    // crop window (cyan) — what the recorded output shows
+    wctx.lineWidth=Math.max(2,fw/220); wctx.strokeStyle=lastConf>=P.gate?"#2fb3c9":"#6b8c98";
+    wctx.setLineDash([fw/60,fw/90]); wctx.strokeRect(crop.x,crop.y,crop.w,crop.h); wctx.setLineDash([]);
+
+    // ---- Recorded output: the digital-zoom crop (THIS is the fcWorker drawImage seam) ----
+    octx.drawImage(cam, crop.x,crop.y,crop.w,crop.h, 0,0,fw,fh);
+
+    // HUD
+    const z = fw/Math.max(1,crop.w);
+    $("sZoom").textContent = z.toFixed(1)+"×";
+    $("sConf").textContent = target ? Math.round(lastConf*100)+"%" : "—";
+    $("sBlob").textContent = det.n||0;
+    const bar=$("confBar"); bar.style.width=(lastConf*100)+"%";
+    bar.style.background = lastConf>=P.gate ? "var(--accent2)" : lastConf>0.15 ? "var(--warn)" : "var(--danger)";
+
+    fpsN++; const now=performance.now();
+    if(now-fpsClock>=500){ fps=Math.round(fpsN*1000/(now-fpsClock)); $("sFps").textContent=fps; fpsN=0; fpsClock=now; }
+  }
+  schedule();
+}
+function schedule(){
+  if(!running || rafPending) return;
+  rafPending = true;
+  if(cam.requestVideoFrameCallback) cam.requestVideoFrameCallback(frame);
+  else requestAnimationFrame(frame);
+}
+
+/* ---- Tap-to-lock: sample the bobber colour where the user taps ---- */
+$("wideWrap").addEventListener("click", ev=>{
+  if(!running || !cam.videoWidth) return;
+  const r = $("wideWrap").getBoundingClientRect();
+  const ax = Math.round((ev.clientX-r.left)/r.width*AW);
+  const ay = Math.round((ev.clientY-r.top)/r.height*AH);
+  actx.drawImage(cam,0,0,AW,AH);
+  // Average a small neighbourhood for a stable sample.
+  let R=0,G=0,B=0,c=0;
+  for(let dy=-2;dy<=2;dy++) for(let dx=-2;dx<=2;dx++){
+    const x=ax+dx,y=ay+dy; if(x<0||y<0||x>=AW||y>=AH) continue;
+    const p=actx.getImageData(x,y,1,1).data; R+=p[0];G+=p[1];B+=p[2];c++;
+  }
+  const [h,s,v]=rgb2hsv(R/c,G/c,B/c);
+  target={h,s,v};
+  clearPresets();
+  $("tapHint").textContent = `locked hue ${Math.round(h)}° · sat ${Math.round(s*100)}%`;
+  setStatus(`Locked bobber colour: hue ${Math.round(h)}°. Move the rod — the crop should follow.`, "ok");
+});
+
+/* ---- Presets ---- */
+function clearPresets(){ document.querySelectorAll("#preset .chip").forEach(c=>c.classList.remove("on")); }
+$("preset").addEventListener("click", ev=>{
+  const chip=ev.target.closest(".chip"); if(!chip) return;
+  clearPresets(); chip.classList.add("on");
+  target={ h:+chip.dataset.h, s:0.7, v:0.7 };
+  $("tapHint").textContent = `preset hue ${chip.dataset.h}° — tap the bobber for a better lock`;
+  setStatus(`Preset hue ${chip.dataset.h}° set. Tap-to-lock still works better.`, "ok");
+});
+
+/* ---- Sliders ---- */
+function bind(id, key, fmt, scale){
+  const el=$(id), out=$("v"+id.slice(1));
+  const apply=()=>{ const raw=+el.value; P[key]=scale?scale(raw):raw; out.textContent=fmt(P[key]); };
+  el.addEventListener("input", apply); apply();
+}
+bind("rHue","hueTol", v=>v+"°");
+bind("rMin","minBlob", v=>v+" px");
+bind("rZoom","maxZoom", v=>v.toFixed(1)+"×", v=>v/10);
+bind("rPad","pad", v=>v.toFixed(1)+"×", v=>v/10);
+bind("rSmooth","smooth", v=>v.toFixed(2), v=>v/100);
+bind("rGate","gate", v=>v.toFixed(2), v=>v/100);
+
+$("showMask").addEventListener("click", ()=>{ showMask=!showMask; $("showMask").classList.toggle("green",showMask); });
+$("resetBtn").addEventListener("click", ()=>{ target=null; clearPresets(); if(cam.videoWidth) crop={x:0,y:0,w:cam.videoWidth,h:cam.videoHeight};
+  $("tapHint").textContent="tap the bobber to lock its colour"; setStatus("Reset. Lock a colour to begin tracking.","muted"); });
+
+/* ---- Camera lifecycle ---- */
+$("startBtn").addEventListener("click", async ()=>{
+  if(running) return;
+  if(!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){ setStatus("getUserMedia unavailable — need https + a supporting browser.","err"); return; }
+  try{
+    setStatus("Requesting camera…");
+    stream = await navigator.mediaDevices.getUserMedia({ video:{ facingMode:"environment", width:{ideal:1280}, height:{ideal:720} }, audio:false });
+  }catch(e){ setStatus("Camera blocked/failed: "+(e.message||e),"err"); return; }
+  cam.srcObject = stream;
+  await cam.play().catch(()=>{});
+  running=true; fpsClock=performance.now();
+  $("startBtn").disabled=true; $("stopBtn").disabled=false;
+  setStatus("Camera on. Pick a preset or tap the bobber in the wide view.","ok");
+  schedule();
+});
+$("stopBtn").addEventListener("click", ()=>{
+  running=false;
+  if(stream){ stream.getTracks().forEach(t=>t.stop()); stream=null; }
+  cam.srcObject=null;
+  $("startBtn").disabled=false; $("stopBtn").disabled=true;
+  setStatus("Stopped.","muted");
+});
+
+if(!("mediaDevices" in navigator)) setStatus("This browser has no camera API. Serve over https and use Chrome/Safari.","err");
+</script>
+</body>
+</html>
