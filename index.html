@@ -371,13 +371,14 @@ self.onmessage=async(e)=>{
       if(!vRing[vs].key){ for(let i=0;i<vRing.length;i++){ if(vRing[i].key){ vs=i; break; } } }
       const vsel=vRing.slice(vs), clipStart=vsel[0].timestamp;
       const haveAudio=!!(aConfig && aRing.length);
-      let audioDC=null, adescLen=-1;
+      let audioDC=null, usedDesc=0, encDesc=0;
       if(haveAudio){
         let adesc=null;
-        if(aConfig.description){ const d=aConfig.description; adesc = d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer,d.byteOffset,d.byteLength); }
-        if(!adesc || !adesc.byteLength){ adesc=ascFor(aRate,1); adescLen=-adesc.byteLength; }   // negative = we synthesized it
-        else { adescLen=adesc.byteLength; }
-        audioDC={codec:aConfig.codec||'mp4a.40.2',sampleRate:aRate,numberOfChannels:1,description:adesc};
+        if(aConfig.description){ const d=aConfig.description; const u = d instanceof ArrayBuffer ? new Uint8Array(d) : new Uint8Array(d.buffer,d.byteOffset,d.byteLength); encDesc=u.byteLength;
+          if(u.byteLength<=6) adesc=u; }   // a bare AudioSpecificConfig is ~2 bytes; iOS returns a full ~39-byte esds which double-wraps → reject it
+        if(!adesc) adesc=ascFor(aRate,1);
+        usedDesc=adesc.byteLength;
+        audioDC={codec:'mp4a.40.2',sampleRate:aRate,numberOfChannels:1,description:adesc};
       }
       const opts={target:new ArrayBufferTarget(),video:{codec:'avc',width:W,height:H},fastStart:'in-memory',firstTimestampBehavior:'offset'};
       if(haveAudio) opts.audio={codec:'aac',numberOfChannels:1,sampleRate:aRate};
@@ -388,7 +389,7 @@ self.onmessage=async(e)=>{
         muxer.addAudioChunk(new EncodedAudioChunk({type:'key',timestamp:it.timestamp,duration:it.duration,data:it.data}),{decoderConfig:audioDC}); aAdded++; } }
       muxer.finalize();
       const buf=muxer.target.buffer;
-      post({type:'clip',buffer:buf,bytes:buf.byteLength,audio:haveAudio,aAdded,aRing:aRing.length,adescLen},[buf]);
+      post({type:'clip',buffer:buf,bytes:buf.byteLength,audio:haveAudio,aAdded,aRing:aRing.length,usedDesc,encDesc},[buf]);
     }
   }catch(err){ post({type:'fatal',msg:String(err)}); }
 };
@@ -401,7 +402,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.08.3";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.08.4";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -1055,7 +1056,7 @@ window.FishClip = (function () {
     const blob = m.buffer ? new Blob([m.buffer], { type: "video/mp4" }) : null;
     if (blob && window.commitBite) { commitBite(blob, pendingLanded).catch(() => {}); toast(m.audio ? "🎥 saved · sound ✓" : "🎥 saved · no audio"); }
     else toast("clip not ready");
-    dbg("clip " + (blob ? Math.round(blob.size / 1024) + "kb" : "EMPTY") + " · audMuxed " + (m.aAdded || 0) + "/" + (m.aRing || 0) + " · micPeak " + micPeak.toFixed(3) + " · desc " + (m.adescLen == null ? "?" : m.adescLen));
+    dbg("clip " + (blob ? Math.round(blob.size / 1024) + "kb" : "EMPTY") + " · audMuxed " + (m.aAdded || 0) + "/" + (m.aRing || 0) + " · micPeak " + micPeak.toFixed(3) + " · desc " + (m.usedDesc || 0) + "/enc" + (m.encDesc || 0));
     micPeak = 0;
     busy = false;
   }
