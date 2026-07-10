@@ -402,7 +402,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.08.4";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.08.5";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -819,8 +819,18 @@ async function renderFish(){
   <button class="btn ghost sm" style="color:var(--danger);border-color:var(--danger)" onclick="delFish('${c.id}')">Delete</button></div>`;
   const m=$("fishMedia");
   if(c.hasPhoto){const d=await photoURL(c);if(d)m.innerHTML+=`<img class="media" src="${d}">`;}
-  if(c.hasVideo){const u=await videoURL(c);if(u)m.innerHTML+=`<video class="media" src="${u}" controls playsinline></video>`;}
+  if(c.hasVideo){const u=await videoURL(c);if(u)m.innerHTML+=`<video class="media" src="${u}" controls playsinline></video><button class="btn ghost sm" style="margin-top:6px" onclick="shareClip('${c.id}')">⬇ Save / share clip</button>`;}
   if(!c.hasPhoto&&!c.hasVideo)m.innerHTML='<div class="hint">No photo or video for this catch.</div>';
+}
+
+// Export a clip to Photos/Files via the iOS share sheet (falls back to a download).
+async function shareClip(id){
+  try{
+    const blob=await getClip(id); if(!blob){toast("clip isn't on this device");return;}
+    const file=new File([blob],"panfish-"+id+".mp4",{type:"video/mp4"});
+    if(navigator.canShare&&navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:"Fishing clip"}); }
+    else { const u=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=u; a.download="panfish-"+id+".mp4"; document.body.appendChild(a); a.click(); a.remove(); setTimeout(()=>URL.revokeObjectURL(u),5000); }
+  }catch(e){ /* user dismissed the share sheet — nothing to do */ }
 }
 
 function delFish(id){
