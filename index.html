@@ -75,6 +75,9 @@
   .photo-preview{width:100%;max-height:240px;object-fit:cover;border-radius:12px;margin-top:8px;display:none}
   .campreview{width:100%;max-height:46vh;object-fit:cover;border-radius:14px;margin:12px 0;background:#0c2530;display:none}
   .campreview.on{display:block}
+  #tripGallery{display:none;margin:12px 0}
+  #tripGallery.on{display:block}
+  .tripgal-empty{border:1.5px dashed var(--line);border-radius:14px;padding:26px 16px;text-align:center;color:var(--muted);font-size:13px;line-height:1.5;background:var(--panel2)}
   .updbanner{position:fixed;top:0;left:0;right:0;z-index:60;background:var(--accent2);color:#fff;font-weight:700;text-align:center;padding:calc(8px + env(safe-area-inset-top)) 12px 8px;font-size:14px}
   .updbanner button{background:#fff;color:var(--accent2);border:none;border-radius:8px;padding:6px 12px;font-weight:800;margin-left:8px}
   .clickable{cursor:pointer}
@@ -125,6 +128,7 @@
         <button class="btn warn sm" style="padding:8px 4px;font-size:13px" onclick="endTrip()">End trip</button>
       </div>
       <video id="camPreview" class="campreview" playsinline autoplay muted></video>
+      <div id="tripGallery"></div>
       <button class="btn green" onclick="newCatch()">🐟 Log Catch</button>
       <div class="grid2" style="margin-top:12px">
         <div class="stat"><b id="atFish">0</b><span>Fish this trip</span></div>
@@ -401,7 +405,7 @@ const LURES=["Marabou jig","Tube jig","Soft plastic grub","Crappie tube","Beetle
 const TECH=["Vertical jig","Cast & retrieve","Slip bobber","Fixed bobber","Drop-shot","Trolling","Spider rig","Bottom bounce","Fly"];
 const RETR=["Dead stick","Slow","Medium","Fast","Erratic"];
 const KEY="panfish_v1";
-const APP_VERSION="2026.07.09.1";   // bump on each deploy; drives the "update available" check
+const APP_VERSION="2026.07.09.2";   // bump on each deploy; drives the "update available" check
 let S=load();
 let reviewThisTrip=true, pendingPhoto=null, catchStamp=null;
 var pendingClip=null;   // var (not let): window-aliased so FishClip can set window.pendingClip
@@ -505,6 +509,29 @@ function renderHome(){
   }
   updateDot();
   if(window.FishClip)FishClip.refreshPreview();
+  renderTripGallery();
+}
+
+// When not recording, the camera slot becomes a gallery of this trip's photos/clips.
+function renderTripGallery(){
+  const g=document.getElementById("tripGallery"); if(!g) return;
+  if(window.FishClip && FishClip.watching){ g.classList.remove("on"); g.innerHTML=""; return; }   // camera is live
+  const t=activeTrip();
+  if(!t){ g.classList.remove("on"); g.innerHTML=""; return; }
+  const media=S.catches.filter(c=>c.trip===t.id&&(c.hasPhoto||c.hasVideo)).reverse();
+  if(!media.length){
+    g.innerHTML=`<div class="tripgal-empty"><div style="font-size:30px;margin-bottom:6px">📸</div>Photos and clips from this trip will show here.<br>Tap <b>🎥 Record</b> for a hands-free clip, or <b>🐟 Log Catch</b>.</div>`;
+    g.classList.add("on"); return;
+  }
+  const tiles=media.map(c=>{
+    const label=esc(c.species||(c.missed?"Missed":"Catch"));
+    const inner=c.hasPhoto?`<img id="tg-${c.id}" alt="">`:`<div class="ph">🎥</div>`;
+    const pv=c.hasVideo?'<span class="pv">🎥</span>':'';
+    return `<div class="gtile" onclick="openFish('${c.id}')">${inner}${pv}<span class="lbl">${label}</span></div>`;
+  }).join("");
+  g.innerHTML=`<div class="gallery">${tiles}</div>`;
+  g.classList.add("on");
+  media.forEach(async c=>{ if(!c.hasPhoto)return; const d=await photoURL(c); const el=document.getElementById("tg-"+c.id); if(d&&el)el.src=d; });
 }
 
 //// ---------- trip / spot ----------
@@ -1141,6 +1168,7 @@ window.FishClip = (function () {
     startRecog();
     try { wake = await navigator.wakeLock.request("screen"); } catch (e) {}
     setBtn();
+    if (window.renderTripGallery) renderTripGallery();   // hide gallery, camera is live now
   }
 
   function stop() {
@@ -1155,6 +1183,7 @@ window.FishClip = (function () {
     if (pv) { pv.srcObject = null; pv.classList.remove("on"); }
     stream = null; rec = null;
     setBtn();
+    if (window.renderTripGallery) renderTripGallery();   // camera off → show the trip gallery again
   }
 
   function setBtn() {
